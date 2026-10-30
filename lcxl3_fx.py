@@ -19,21 +19,18 @@ LED grid used here (control indices = DAW-mode CC numbers):
 Effects produce a brightness value per LED; the active theme turns that into
 colour (shadow -> mid -> highlight), so every effect shares one palette.
 
-Effects (two banks of 8 on the lower buttons):
-  bank 1:  1 breathe  2 tide  3 aurora  4 ember
-           5 constellation  6 comet  7 ripple  8 lighthouse
-  bank 2:  9 drift  10 horizon  11 heartbeat  12 interference
-           13 fireflies  14 candle  15 orbit  16 lattice
+Effects (one per lower button):
+  1 constellation  2 drift  3 interference  4 lighthouse
+  5 sonar  6 meteors  7 pendulum  8 spiral
 Themes:   amber, ice, mono, indigo, moss
 
 Controls:
   Fader 1              speed
   Fader 2              brightness
   Fader 3              theme (5 zones, bottom to top)
-  Lower button row     pick effect 1-8 in the current bank
-                       (press the active effect's button again to flip bank)
+  Lower button row     pick effect 1-8
   Upper button row     soft swell on that column
-  Play / Record        next / previous effect (through both banks)
+  Play / Record        next / previous effect
   Ctrl+C               quit (fade out, device back to normal mode)
 
 Setup (once):
@@ -232,32 +229,6 @@ def smoothstep(lo, hi, x):
     return k * k * (3 - 2 * k)
 
 
-def blob(grid, x, y, level, spread=0.6):
-    """Soft round light centred at (row y, col x), max-blended into grid."""
-    for r in range(ROWS):
-        for c in range(COLS):
-            d2 = (c - x) ** 2 + (r - y) ** 2
-            grid[r][c] = max(grid[r][c], level * math.exp(-d2 / spread))
-
-
-def _hash(ix, iy, seed):
-    n = (ix * 374761393 + iy * 668265263 + seed * 1442695041) & 0xFFFFFFFF
-    n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
-    return ((n ^ (n >> 16)) & 0xFFFFFF) / 0xFFFFFF
-
-
-def noise2(x, y, seed=0):
-    """Smooth 2D value noise, 0..1."""
-    ix, iy = math.floor(x), math.floor(y)
-    fx, fy = x - ix, y - iy
-    ux, uy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
-    a = _hash(ix, iy, seed)
-    b = _hash(ix + 1, iy, seed)
-    c = _hash(ix, iy + 1, seed)
-    d = _hash(ix + 1, iy + 1, seed)
-    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy
-
-
 # ------------------------------------------------------------------ themes --
 
 class Theme:
@@ -298,73 +269,6 @@ class Effect:
         raise NotImplementedError
 
 
-class Breathe(Effect):
-    name = "breathe"
-    PERIOD = 6.0
-
-    def frame(self, t, dt):
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                delay = math.hypot((r - CENTER_R) * 1.3, c - CENTER_C) * 0.22
-                b = 0.5 - 0.5 * math.cos(2 * math.pi * (t - delay) / self.PERIOD)
-                grid[r][c] = 0.15 + 0.75 * b ** 1.5
-        return grid
-
-
-class Tide(Effect):
-    name = "tide"
-
-    def frame(self, t, dt):
-        grid = blank()
-        for r in range(ROWS):
-            x = CENTER_C + 4.2 * math.sin(t * 0.35) + 0.6 * math.sin(t * 0.5 + r * 0.4)
-            for c in range(COLS):
-                grid[r][c] = 0.08 + 0.92 * math.exp(-((c - x) ** 2) / (2 * 1.6 ** 2))
-        return grid
-
-
-class Aurora(Effect):
-    name = "aurora"
-
-    def frame(self, t, dt):
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                n = (noise2(c * 0.45 + t * 0.25, r * 0.25 - t * 0.08) * 0.65
-                     + noise2(c * 0.9 - t * 0.4, r * 0.6 + t * 0.15, 1) * 0.35)
-                grid[r][c] = smoothstep(0.25, 0.85, n)
-        return grid
-
-
-class Ember(Effect):
-    name = "ember"
-    STEP = 1 / 10
-
-    def __init__(self):
-        self.heat = blank()
-        self.acc = 0.0
-        self.t = 0.0
-
-    def frame(self, t, dt):
-        self.acc += dt
-        while self.acc >= self.STEP:
-            self.acc -= self.STEP
-            self.t += self.STEP
-            h = self.heat
-            for c in range(COLS):
-                glow = 0.3 + 0.5 * noise2(c * 0.7, self.t * 0.6, 2)
-                if random.random() < 0.02:
-                    glow = 0.95  # occasional flare
-                h[ROWS - 1][c] = glow
-            for r in range(ROWS - 1):
-                below = h[r + 1]
-                for c in range(COLS):
-                    avg = (below[c] * 2 + below[max(c - 1, 0)] + below[min(c + 1, COLS - 1)]) / 4
-                    h[r][c] = max(0.0, avg - random.uniform(0.1, 0.2))
-        return [row[:] for row in self.heat]
-
-
 class Constellation(Effect):
     name = "constellation"
     MAX_STARS = 7
@@ -382,60 +286,6 @@ class Constellation(Effect):
         grid = blank()
         for r, c, start, duration, peak in self.stars:
             grid[r][c] = peak * math.sin(math.pi * (t - start) / duration) ** 2
-        return grid
-
-
-class Comet(Effect):
-    name = "comet"
-    TRAIL = 14
-
-    def frame(self, t, dt):
-        grid = blank()
-        for k in range(self.TRAIL):
-            tk = t - k * 0.08
-            x = CENTER_C + 3.6 * math.sin(tk * 0.7)
-            y = CENTER_R + 2.1 * math.sin(tk * 1.1 + 1.0)
-            blob(grid, x, y, math.exp(-k * 0.22))
-        return grid
-
-
-class Ripple(Effect):
-    name = "ripple"
-
-    def __init__(self):
-        self.rings = []  # [row, col, start]
-        self.next_at = 0.0
-
-    def frame(self, t, dt):
-        if t >= self.next_at or t < self.next_at - 10:
-            self.rings.append([random.uniform(0, ROWS - 1), random.uniform(0, COLS - 1), t])
-            self.next_at = t + random.uniform(2.5, 4.5)
-        self.rings = [ring for ring in self.rings if 0 <= t - ring[2] < 6]
-        grid = blank()
-        for r0, c0, start in self.rings:
-            age = t - start
-            radius = age * 2.2
-            fade = math.exp(-age * 0.6)
-            for r in range(ROWS):
-                for c in range(COLS):
-                    d = math.hypot(r - r0, c - c0)
-                    grid[r][c] = max(grid[r][c], fade * math.exp(-((d - radius) ** 2) / (2 * 0.55 ** 2)))
-        return grid
-
-
-class Lighthouse(Effect):
-    name = "lighthouse"
-
-    def frame(self, t, dt):
-        beam = t * 1.2
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                dy, dx = (r - CENTER_R) * 1.3, c - CENTER_C
-                behind = (beam - math.atan2(dy, dx)) % (2 * math.pi)  # radians since the beam passed
-                ahead = 2 * math.pi - behind
-                i = max(math.exp(-behind / 0.9), math.exp(-ahead / 0.12))
-                grid[r][c] = i * (0.55 + 0.45 * min(1.0, math.hypot(dy, dx) / 3))
         return grid
 
 
@@ -460,39 +310,6 @@ class Drift(Effect):
         return grid
 
 
-class Horizon(Effect):
-    name = "horizon"
-    DAY = 30.0
-
-    def frame(self, t, dt):
-        rise = 0.5 - 0.5 * math.cos(2 * math.pi * t / self.DAY)
-        y = ROWS - 0.5 - (ROWS + 1) * rise          # horizon line, rows below it glow
-        x = CENTER_C + 3 * math.sin(2 * math.pi * t / (2 * self.DAY))
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                shimmer = 0.85 + 0.15 * noise2(c * 0.6 + t * 0.5, r * 0.6, 3)
-                glow = smoothstep(-1.5, 2.0, r - y) * 0.7 * shimmer
-                sun = math.exp(-((c - x) ** 2 + 1.5 * (r - y) ** 2) / 1.5)
-                grid[r][c] = max(glow, sun)
-        return grid
-
-
-class Heartbeat(Effect):
-    name = "heartbeat"
-    PERIOD = 60 / 54  # 54 bpm
-
-    def frame(self, t, dt):
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                d = math.hypot((r - CENTER_R) * 1.3, c - CENTER_C)
-                p = (t - d * 0.05) % self.PERIOD
-                beat = math.exp(-((p - 0.12) / 0.07) ** 2) + 0.6 * math.exp(-((p - 0.38) / 0.08) ** 2)
-                grid[r][c] = 0.08 + 0.85 * beat * (1 - d / 12)
-        return grid
-
-
 class Interference(Effect):
     name = "interference"
 
@@ -507,63 +324,112 @@ class Interference(Effect):
         return grid
 
 
-class Fireflies(Effect):
-    name = "fireflies"
-    COUNT = 4
+class Lighthouse(Effect):
+    name = "lighthouse"
 
     def frame(self, t, dt):
-        grid = blank()
-        for k in range(self.COUNT):
-            x = noise2(t * 0.15, k * 10, 5) * (COLS + 1) - 1
-            y = noise2(t * 0.15, k * 10, 9) * (ROWS + 1) - 1
-            glow = 0.3 + 0.7 * smoothstep(0.3, 0.7, noise2(t * 0.5, k * 7, 6))
-            blob(grid, x, y, glow, spread=0.5)
-        return grid
-
-
-class Candle(Effect):
-    name = "candle"
-
-    def frame(self, t, dt):
+        beam = t * 1.2
         grid = blank()
         for r in range(ROWS):
             for c in range(COLS):
-                base = 0.25 + 0.3 * r / (ROWS - 1)  # warmer toward the bottom
-                flicker = (0.25 * noise2(c * 0.5 + t * 1.2, r * 0.5, 7)
-                           + 0.1 * noise2(t * 3.5, r * COLS + c, 8))
-                grid[r][c] = base + flicker
+                dy, dx = (r - CENTER_R) * 1.3, c - CENTER_C
+                behind = (beam - math.atan2(dy, dx)) % (2 * math.pi)  # radians since the beam passed
+                ahead = 2 * math.pi - behind
+                i = max(math.exp(-behind / 0.9), math.exp(-ahead / 0.12))
+                grid[r][c] = i * (0.55 + 0.45 * min(1.0, math.hypot(dy, dx) / 3))
         return grid
 
 
-class Orbit(Effect):
-    name = "orbit"
-    BODIES = [(3.4, 0.6, 1.0), (1.7, -1.1, 0.75)]  # radius, angular speed, brightness
+class Sonar(Effect):
+    name = "sonar"
+    PERIOD = 4.0
+    TARGETS = 5
+
+    def __init__(self):
+        self.echo = blank()
+        self.targets = set()
+        self.ping = None
 
     def frame(self, t, dt):
-        grid = blank()
-        for radius, omega, level in self.BODIES:
-            for k in range(7):
-                a = (t - k * 0.07) * omega
-                blob(grid, CENTER_C + radius * math.cos(a), CENTER_R + radius * 0.55 * math.sin(a),
-                     level * math.exp(-k * 0.35))
-        return grid
-
-
-class Lattice(Effect):
-    name = "lattice"
-
-    def frame(self, t, dt):
+        ping = int(t // self.PERIOD)
+        if ping != self.ping:  # new ping: the hidden targets have moved
+            self.ping = ping
+            cells = [(r, c) for r in range(ROWS) for c in range(COLS)]
+            self.targets = set(random.sample(cells, self.TARGETS))
+        radius = (t % self.PERIOD) * 2.2
+        fade = math.exp(-dt / 1.2)
         grid = blank()
         for r in range(ROWS):
             for c in range(COLS):
-                v = (0.5 + 0.5 * math.sin(c * 0.9 + t * 0.8)) * (0.5 + 0.5 * math.sin(r * 1.2 - t * 0.6))
-                grid[r][c] = smoothstep(0.1, 0.8, v)
+                d = math.hypot((r - CENTER_R) * 1.3, c - CENTER_C)
+                ring = math.exp(-((d - radius) / 0.45) ** 2)
+                if (r, c) in self.targets and ring > 0.5:
+                    self.echo[r][c] = 1.0
+                self.echo[r][c] *= fade
+                grid[r][c] = max(0.5 * ring, self.echo[r][c])
         return grid
 
 
-EFFECTS = [Breathe, Tide, Aurora, Ember, Constellation, Comet, Ripple, Lighthouse,
-           Drift, Horizon, Heartbeat, Interference, Fireflies, Candle, Orbit, Lattice]
-BANK = COLS  # effects per bank of lower buttons
+class Meteors(Effect):
+    name = "meteors"
+
+    def __init__(self):
+        self.stars = [(random.randrange(ROWS), random.randrange(COLS), random.uniform(0, 6)) for _ in range(5)]
+        self.meteors = []  # [x, y, vx, vy]
+
+    def frame(self, t, dt):
+        if random.random() < dt * 0.5:
+            vx = random.choice((-1, 1)) * random.uniform(5.0, 8.0)
+            self.meteors.append([-1.0 if vx > 0 else float(COLS), random.uniform(-1.0, 1.0),
+                                 vx, random.uniform(1.5, 3.0)])
+        for m in self.meteors:
+            m[0] += m[2] * dt
+            m[1] += m[3] * dt
+        self.meteors = [m for m in self.meteors if -4 < m[0] < COLS + 4 and m[1] < ROWS + 2]
+        grid = blank()
+        for r, c, phase in self.stars:
+            grid[r][c] = 0.12 + 0.08 * math.sin(t * 1.3 + phase)
+        for x, y, vx, vy in self.meteors:
+            v = math.hypot(vx, vy)
+            ux, uy = vx / v, vy / v
+            for r in range(ROWS):
+                for c in range(COLS):
+                    px, py = c - x, r - y
+                    behind = -(px * ux + py * uy)   # distance behind the head along the path
+                    across = px * uy - py * ux
+                    head = math.exp(-behind / 1.3) if behind >= 0 else math.exp(-behind * behind / 0.08)
+                    grid[r][c] = max(grid[r][c], head * math.exp(-across * across / 0.2))
+        return grid
+
+
+class Pendulum(Effect):
+    name = "pendulum"
+    CYCLE = 40.0  # seconds until all columns line up again
+
+    def frame(self, t, dt):
+        grid = blank()
+        for c in range(COLS):
+            y = CENTER_R + CENTER_R * math.cos(2 * math.pi * (10 + c) * t / self.CYCLE)
+            for r in range(ROWS):
+                grid[r][c] = math.exp(-((r - y) / 0.45) ** 2)
+        return grid
+
+
+class Spiral(Effect):
+    name = "spiral"
+
+    def frame(self, t, dt):
+        twist = 1.4 + 0.5 * math.sin(t * 0.23)
+        grid = blank()
+        for r in range(ROWS):
+            for c in range(COLS):
+                dy, dx = (r - CENTER_R) * 1.3, c - CENTER_C
+                v = math.cos(2 * math.atan2(dy, dx) + math.hypot(dy, dx) * twist - t * 1.6)
+                grid[r][c] = smoothstep(0.55, 0.95, v)
+        return grid
+
+
+EFFECTS = [Constellation, Drift, Interference, Lighthouse, Sonar, Meteors, Pendulum, Spiral]
 XFADE = 1.5  # seconds to crossfade between effects
 
 
@@ -768,10 +634,9 @@ def main():
 
     def announce():
         name, theme = effects[index].name, THEMES[theme_index].name
-        bank = index // BANK + 1
-        log(f"Effect {index + 1}: {name}  bank {bank}  theme: {theme}  (speed x{speed:.1f})")
+        log(f"Effect {index + 1}: {name}  theme: {theme}  (speed x{speed:.1f})")
         if not args.no_screen:
-            dev.screen(f"LED FX  bank {bank}", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
+            dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
 
     def select(new):
         nonlocal index, prev_index, switched_at, loop_from
@@ -935,11 +800,7 @@ def main():
                     if 37 <= msg.control <= 44:
                         pulses[msg.control - 37] = 1.0
                     elif 45 <= msg.control <= 52:
-                        slot = msg.control - 45
-                        bank = index // BANK
-                        if index == bank * BANK + slot:  # same button again: flip bank
-                            bank = (bank + 1) % math.ceil(len(effects) / BANK)
-                        select(min(bank * BANK + slot, len(effects) - 1))
+                        select(min(msg.control - 45, len(effects) - 1))
                     elif msg.control in (CC_PLAY, CC_RECORD):
                         step(1 if msg.control == CC_PLAY else -1)
                 elif msg.channel == CH_FEATURES and msg.control == CC_MODE_REPORT and msg.value not in (1, 2):

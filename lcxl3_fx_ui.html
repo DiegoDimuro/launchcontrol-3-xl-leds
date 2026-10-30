@@ -183,7 +183,7 @@ function build(s) {
   s.effects.forEach((name, i) => {
     const el = document.createElement("div");
     el.className = "fx";
-    el.innerHTML = `<button class="fx-play"><span class="fx-num">${i < 8 ? "Bank 1" : "Bank 2"} · ${i + 1}</span><span class="fx-name">${name}</span></button><input type="checkbox" title="In the loop">`;
+    el.innerHTML = `<button class="fx-play"><span class="fx-num">Button ${i + 1}</span><span class="fx-name">${name}</span></button><input type="checkbox" title="In the loop">`;
     el.querySelector(".fx-play").onclick = () => send({ select: i });
     el.querySelector("input").onchange = e => {
       const on = new Set(state.enabled);

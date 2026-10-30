@@ -1,13 +1,13 @@
 # Launch Control XL 3 LEDs
 
-Ambient LED effects for the **Novation Launch Control XL 3**: 16 animations across the
+Ambient LED effects for the **Novation Launch Control XL 3**: 8 animations across the
 encoder and button LEDs, 5 colour themes, with a browser control panel. Built to run all
 the time in the background and survive the device being unplugged and plugged back in.
 
 ## Features
 
-- **16 effects** in two banks: breathe, tide, aurora, ember, constellation, comet, ripple,
-  lighthouse, drift, horizon, heartbeat, interference, fireflies, candle, orbit, lattice
+- **8 effects**: constellation, drift, interference, lighthouse, sonar, meteors, pendulum,
+  spiral
 - **5 themes**: amber, ice, mono, indigo, moss
 - **Control panel** at <http://127.0.0.1:8765>:
   - a live view of the LEDs
@@ -24,7 +24,7 @@ the time in the background and survive the device being unplugged and plugged ba
   | Fader 1 | Speed |
   | Fader 2 | Brightness |
   | Fader 3 | Theme |
-  | Lower buttons | Pick effect (press again to flip bank) |
+  | Lower buttons | Pick effect |
   | Upper buttons | Swell on that column |
   | Play / Record | Next / previous effect |
 
