@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.log
+# personal settings written by the control panel
+lcxl3_fx.json
+lcxl3_fx.json.tmp

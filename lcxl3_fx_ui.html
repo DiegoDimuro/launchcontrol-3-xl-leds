@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LED FX Control</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --ink: #1d1b18; --muted: #6f6a62; --line: #e3ded6;
+    --accent: #e0741c; --accent-ink: #ffffff; --off: #d9d4cc; --ok: #2f8f4e; --warn: #b4532a;
+    --device: #1b1a19; --socket: #2a2826;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121110; --panel: #1c1b19; --ink: #ece8e1; --muted: #9a948a; --line: #2e2c29;
+      --accent: #f08a35; --accent-ink: #1a0f05; --off: #3a3733; --ok: #56c07a; --warn: #e07a4f;
+      --device: #0b0b0a; --socket: #1f1e1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 16px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .pill { font-size: 13px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  .spacer { flex: 1; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .top { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .top { grid-template-columns: 1fr; } }
+
+  /* device mirror */
+  .device { background: var(--device); border-radius: 12px; padding: 14px; display: grid;
+            grid-template-columns: repeat(8, 1fr); gap: 8px; }
+  .led { aspect-ratio: 1; border-radius: 50%; background: #000; box-shadow: inset 0 0 0 2px var(--socket); transition: background .1s linear; }
+  .led.btn { border-radius: 5px; aspect-ratio: 1.4; }
+  .led.btn:hover { outline: 1px solid #fff3; cursor: pointer; }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+
+  .now { display: grid; gap: 12px; align-content: start; }
+  .now-name { font-size: 28px; font-weight: 650; text-transform: capitalize; line-height: 1.1; }
+  .now-sub { color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+           border-radius: 9px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; flex-wrap: wrap; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); padding: 7px 11px; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .switch input { appearance: none; width: 38px; height: 22px; border-radius: 999px; background: var(--off); position: relative; cursor: pointer; margin: 0; transition: background .15s; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { transform: translateX(16px); }
+
+  /* effects */
+  .effects { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+  .fx { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line);
+        border-radius: 10px; background: transparent; }
+  .fx.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .fx.disabled .fx-name { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+  .fx-play { flex: 1; text-align: left; border: 0; padding: 0; display: grid; }
+  .fx-num { font-size: 11.5px; color: var(--muted); }
+  .fx-name { text-transform: capitalize; font-weight: 550; }
+  .fx input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+
+  /* look */
+  .themes { display: flex; gap: 8px; flex-wrap: wrap; }
+  .theme { display: grid; gap: 6px; padding: 8px; min-width: 92px; text-align: left; }
+  .theme.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .swatch { height: 18px; border-radius: 5px; }
+  .theme span { text-transform: capitalize; font-size: 13.5px; }
+  .sliders { display: grid; gap: 14px; margin-top: 16px; }
+  .slider { display: grid; grid-template-columns: 90px 1fr 52px; align-items: center; gap: 12px; }
+  .slider output { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=number] { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+                       border-radius: 9px; padding: 6px 8px; width: 80px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .offline main > :not(header) { opacity: .55; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>LED FX</h1>
+    <span id="status" class="pill">connecting…</span>
+    <span class="spacer"></span>
+    <label class="switch" title="Fade the LEDs out without stopping the service">
+      <input type="checkbox" id="power"> <span>LEDs on</span>
+    </label>
+  </header>
+
+  <section class="top">
+    <div class="card">
+      <h2>Live view</h2>
+      <div class="device" id="device"></div>
+      <div class="hint">Mirror of the 40 LEDs. Click a button-row LED to send a swell down that column.</div>
+    </div>
+    <div class="card now">
+      <h2>Now playing</h2>
+      <div>
+        <div class="now-name" id="nowName">—</div>
+        <div class="now-sub" id="nowSub"></div>
+      </div>
+      <div class="row">
+        <button id="prev">◀ Prev</button>
+        <button id="next" class="primary">Next ▶</button>
+      </div>
+      <div>
+        <h2 style="margin-top:8px">Loop</h2>
+        <div class="seg" id="loopSeg"></div>
+        <div class="row" style="margin-top:10px">
+          <span class="muted">Custom</span>
+          <input type="number" id="loopCustom" min="0" step="0.5"> <span class="muted">min</span>
+          <span class="spacer"></span>
+          <label class="switch"><input type="checkbox" id="shuffle"> <span>Shuffle</span></label>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="margin-bottom:12px">
+      <h2 style="margin:0">Effects</h2>
+      <span class="muted" id="enabledCount"></span>
+      <span class="spacer"></span>
+      <button id="allOn">All</button>
+      <button id="allOff">None</button>
+    </div>
+    <div class="effects" id="effects"></div>
+    <div class="hint">Click a name to play it now. The checkbox sets whether it's part of the loop and of Play/Record on the device.</div>
+  </section>
+
+  <section class="card">
+    <h2>Look</h2>
+    <div class="themes" id="themes"></div>
+    <div class="sliders">
+      <div class="slider"><label for="speed">Speed</label><input type="range" id="speed" min="0.2" max="3" step="0.05"><output id="speedOut"></output></div>
+      <div class="slider"><label for="brightness">Brightness</label><input type="range" id="brightness" min="0.05" max="1" step="0.01"><output id="brightnessOut"></output></div>
+    </div>
+    <div class="hint">The faders on the device still work too; this page follows them.</div>
+  </section>
+</main>
+
+<script>
+const LOOPS = [[0, "Off"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [300, "5 min"], [600, "10 min"], [1800, "30 min"]];
+const $ = id => document.getElementById(id);
+let state = null, built = false, dragging = null, lastOk = 0;
+
+async function send(cmd) {
+  try {
+    await fetch("/api/command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cmd) });
+  } catch (e) {}
+  poll();
+}
+
+function build(s) {
+  const dev = $("device");
+  for (let i = 0; i < 40; i++) {
+    const d = document.createElement("div");
+    d.className = "led" + (i >= 24 ? " btn" : "");
+    if (i >= 24) d.onclick = () => send({ pulse: i % 8 });
+    dev.appendChild(d);
+  }
+  const seg = $("loopSeg");
+  for (const [sec, label] of LOOPS) {
+    const b = document.createElement("button");
+    b.textContent = label; b.dataset.sec = sec;
+    b.onclick = () => send({ loop_seconds: sec });
+    seg.appendChild(b);
+  }
+  const fx = $("effects");
+  s.effects.forEach((name, i) => {
+    const el = document.createElement("div");
+    el.className = "fx";
+    el.innerHTML = `<button class="fx-play"><span class="fx-num">${i < 8 ? "Bank 1" : "Bank 2"} · ${i + 1}</span><span class="fx-name">${name}</span></button><input type="checkbox" title="In the loop">`;
+    el.querySelector(".fx-play").onclick = () => send({ select: i });
+    el.querySelector("input").onchange = e => {
+      const on = new Set(state.enabled);
+      e.target.checked ? on.add(name) : on.delete(name);
+      send({ enabled: [...on] });
+    };
+    fx.appendChild(el);
+  });
+  const th = $("themes");
+  for (const t of s.themes) {
+    const b = document.createElement("button");
+    b.className = "theme"; b.dataset.name = t.name;
+    b.innerHTML = `<div class="swatch" style="background:linear-gradient(90deg,#000,${t.colors.join(",")})"></div><span>${t.name}</span>`;
+    b.onclick = () => send({ theme: t.name });
+    th.appendChild(b);
+  }
+  for (const id of ["speed", "brightness"]) {
+    const input = $(id);
+    let timer = null;
+    input.addEventListener("pointerdown", () => dragging = id);
+    window.addEventListener("pointerup", () => { if (dragging === id) dragging = null; });
+    input.oninput = () => {
+      $(id + "Out").textContent = fmt(id, +input.value);
+      clearTimeout(timer);
+      timer = setTimeout(() => send({ [id]: +input.value }), 60);
+    };
+  }
+  $("loopCustom").onchange = e => send({ loop_seconds: Math.max(0, +e.target.value) * 60 });
+  $("shuffle").onchange = e => send({ shuffle: e.target.checked });
+  $("power").onchange = e => send({ power: e.target.checked });
+  $("prev").onclick = () => send({ step: -1 });
+  $("next").onclick = () => send({ step: 1 });
+  $("allOn").onclick = () => send({ enabled: s.effects });
+  $("allOff").onclick = () => send({ enabled: [] });
+  built = true;
+}
+
+const fmt = (id, v) => id === "speed" ? `×${v.toFixed(1)}` : `${Math.round(v * 100)}%`;
+const dur = s => s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : `${Math.ceil(s)} s`;
+
+function render(s) {
+  if (!built) build(s);
+  const leds = $("device").children;
+  s.leds.forEach((c, i) => leds[i].style.background = c);
+
+  const status = $("status");
+  status.textContent = s.connected ? "Device connected" : "Waiting for device…";
+  status.className = "pill " + (s.connected ? "ok" : "warn");
+
+  $("nowName").textContent = s.effects[s.index];
+  const enabledSet = new Set(s.enabled);
+  const loopTxt = s.next_in == null ? "loop off" : `next in ${dur(s.next_in)}${s.shuffle ? " (shuffle)" : ""}`;
+  $("nowSub").textContent = `#${s.index + 1} · ${s.theme} · ${loopTxt}`;
+
+  for (const b of $("loopSeg").children) b.classList.toggle("on", +b.dataset.sec === s.loop_seconds);
+  if (document.activeElement !== $("loopCustom")) $("loopCustom").value = s.loop_seconds ? +(s.loop_seconds / 60).toFixed(2) : "";
+  $("shuffle").checked = s.shuffle;
+  $("power").checked = s.power;
+
+  [...$("effects").children].forEach((el, i) => {
+    const on = enabledSet.has(s.effects[i]);
+    el.classList.toggle("active", i === s.index);
+    el.classList.toggle("disabled", !on);
+    el.querySelector("input").checked = on;
+  });
+  $("enabledCount").textContent = s.enabled.length ? `${s.enabled.length} of ${s.effects.length} in loop` : "none checked — loop uses all";
+
+  for (const b of $("themes").children) b.classList.toggle("on", b.dataset.name === s.theme);
+  for (const id of ["speed", "brightness"]) {
+    if (dragging !== id) { $(id).value = s[id]; $(id + "Out").textContent = fmt(id, s[id]); }
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    const s = await r.json();
+    if (s.effects) { state = s; lastOk = Date.now(); render(s); }
+  } catch (e) {}
+  document.body.classList.toggle("offline", Date.now() - lastOk > 3000);
+  if (Date.now() - lastOk > 3000) { $("status").textContent = "Service not running"; $("status").className = "pill warn"; }
+}
+setInterval(poll, 150);
+poll();
+</script>
+</body>
+</html>
