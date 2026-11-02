@@ -424,46 +424,49 @@ def main():
                    speed=round(speed, 3), brightness=round(brightness, 3))
         save_config(args.config, cfg)
 
-    def show_screen():
+    def show_screen(wake=True):
+        """wake=False (auto-loop): only refresh the text if the screen is already on, keep its timeout."""
         nonlocal screen_at
-        if not args.no_screen:
-            name, theme = effects[index].name, THEMES[theme_index].name
-            dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
+        if args.no_screen or (not wake and screen_at is None):
+            return
+        name, theme = effects[index].name, THEMES[theme_index].name
+        dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
+        if wake:
             screen_at = time.perf_counter()
 
-    def announce():
+    def announce(wake=True):
         name, theme = effects[index].name, THEMES[theme_index].name
         log(f"Effect {index + 1}: {name}  theme: {theme}  (speed x{speed:.1f})")
-        show_screen()
+        show_screen(wake)
 
-    def select(new):
+    def select(new, wake=True):
         nonlocal index, prev_index, switched_at, loop_from
         loop_from = time.perf_counter()
         if new == index:
             return
         prev_index, index, switched_at = index, new, loop_from
-        announce()
+        announce(wake)
         changed()
 
     def playlist():
         order = [i for i, e in enumerate(effects) if e.name in cfg["enabled"]]
         return order or list(range(len(effects)))
 
-    def step(direction):
+    def step(direction, wake=True):
         """Next/previous effect among the enabled ones."""
         order = playlist()
         later = [i for i in order if (i - index) * direction > 0]
         if later:
-            select(min(later) if direction > 0 else max(later))
+            select(min(later) if direction > 0 else max(later), wake)
         else:
-            select(order[0] if direction > 0 else order[-1])
+            select(order[0] if direction > 0 else order[-1], wake)
 
     def advance():
         others = [i for i in playlist() if i != index]
         if cfg["shuffle"] and others:
-            select(random.choice(others))
+            select(random.choice(others), wake=False)
         else:
-            step(+1)
+            step(+1, wake=False)
 
     def apply(cmd):
         """A command from the control panel."""

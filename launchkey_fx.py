@@ -454,38 +454,40 @@ class LaunchkeyRig:
         self.cfg.update(effect=self.names[self.index], theme=THEME_NAMES[self.theme_index])
         self.on_change()
 
-    def show_screen(self, name=None, value=None):
-        if self.no_screen or not self.dev.connected:
+    def show_screen(self, name=None, value=None, wake=True):
+        """wake=False (auto-loop): only refresh the text if the screen is already on, keep its timeout."""
+        if self.no_screen or not self.dev.connected or (not wake and self.screen_at is None):
             return
         if name is None:
             name = f"{self.index + 1} {self.names[self.index]}"
             value = f"{THEME_NAMES[self.theme_index]} x{float(self.cfg['speed']):.1f}"
         self.dev.screen("LED FX", name, value)
-        self.screen_at = time.perf_counter()
+        if wake:
+            self.screen_at = time.perf_counter()
 
-    def announce(self):
+    def announce(self, wake=True):
         log(f"Launchkey effect {self.index + 1}: {self.names[self.index]}  theme: {THEME_NAMES[self.theme_index]}")
-        self.show_screen()
+        self.show_screen(wake=wake)
 
-    def select(self, new):
+    def select(self, new, wake=True):
         self.loop_from = time.perf_counter()
         if new == self.index:
             return
         self.prev_index, self.index, self.switched_at = self.index, new, self.loop_from
-        self.announce()
+        self.announce(wake)
         self.changed()
 
     def playlist(self):
         order = [i for i, n in enumerate(self.names) if n in self.cfg["enabled"]]
         return order or list(range(len(self.names)))
 
-    def step(self, direction):
+    def step(self, direction, wake=True):
         order = self.playlist()
         later = [i for i in order if (i - self.index) * direction > 0]
         if later:
-            self.select(min(later) if direction > 0 else max(later))
+            self.select(min(later) if direction > 0 else max(later), wake)
         else:
-            self.select(order[0] if direction > 0 else order[-1])
+            self.select(order[0] if direction > 0 else order[-1], wake)
 
     def set_theme(self, i):
         self.theme_index = i % len(THEMES)
@@ -705,9 +707,9 @@ class LaunchkeyRig:
         if loop > 0 and now - self.loop_from > loop:
             others = [i for i in self.playlist() if i != self.index]
             if self.cfg["shuffle"] and others:
-                self.select(random.choice(others))
+                self.select(random.choice(others), wake=False)
             else:
-                self.step(1)
+                self.step(1, wake=False)
 
         timeout = float(self.root_cfg.get("screen_timeout", 30))
         if self.screen_at is not None and timeout > 0 and now - self.screen_at > timeout:
