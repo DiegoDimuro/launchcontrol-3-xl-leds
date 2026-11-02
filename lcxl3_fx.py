@@ -19,16 +19,17 @@ LED grid used here (control indices = DAW-mode CC numbers):
 Effects produce a brightness value per LED; the active theme turns that into
 colour (shadow -> mid -> highlight), so every effect shares one palette.
 
-Effects (one per lower button):
-  1 constellation  2 drift  3 interference  4 lighthouse
-  5 sonar  6 meteors  7 pendulum  8 spiral
-Themes:   amber, ice, mono, indigo, moss
+Effects (lower buttons 1-4):
+  1 constellation  2 drift  3 showers  4 haze
+Built as idle displays: sparse, one cell or column at a time, random timing,
+nothing sweeping the whole grid, slow fades.
+Themes:   amber, ice, mono, indigo, moss, dusk, sea glass, slate, sand, tide, aurora
 
 Controls:
   Fader 1              speed
   Fader 2              brightness
-  Fader 3              theme (5 zones, bottom to top)
-  Lower button row     pick effect 1-8
+  Fader 3              theme (one zone per theme, bottom to top)
+  Lower button row     pick effect
   Upper button row     soft swell on that column
   Play / Record        next / previous effect
   Ctrl+C               quit (fade out, device back to normal mode)
@@ -41,27 +42,29 @@ Setup (once):
 
 Run (each time):
   source .venv/bin/activate           (Windows: .venv\\Scripts\\activate)
-  python lcxl3_fx.py                 (or --list, --effect aurora, --theme ice, --auto 5, --debug, --log fx.log)
+  python lcxl3_fx.py                 (or --list, --effect snow, --theme ice, --auto 5, --debug, --log fx.log)
   deactivate                         (when done)
 
 Unplugging is fine: the script waits for the device and picks up where it left off.
 Windows autostart: the "LCXL3-FX" scheduled task runs it with pythonw.exe at logon.
 Control panel: http://127.0.0.1:8765 (lcxl3_fx_ui.html) - effects, loop, theme, speed,
 brightness, on/off. Settings are kept in lcxl3_fx.json.
+A Launchkey MK4, if plugged in, gets its own effects and panel tab (launchkey_fx.py).
 """
 
 import argparse
-import json
 import math
 import os
-import queue
 import random
 import sys
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import mido
+
+import fxcore
+from fxcore import (BLACK, GAMMA, THEMES, ControlServer, clamp01, envelope, hex_color, lerp, load_config,
+                    log, save_config, scale, smoothstep, themes_for_ui)
+from launchkey_fx import LaunchkeyRig
 
 # ---------------------------------------------------------------- protocol --
 
@@ -77,9 +80,6 @@ CC_PLAY, CC_RECORD = 116, 118
 CC_MODE_REPORT = 30
 
 SCREEN_STATIONARY = 0x35
-GAMMA = 2.2
-
-BLACK = (0.0, 0.0, 0.0)
 
 
 class LaunchControlXL3:
@@ -108,7 +108,9 @@ class LaunchControlXL3:
             low = n.lower()
             if ("midiout2" in low or "midiin2" in low) and ("lcxl3" in low or "launch control xl" in low):
                 return n
-        return next((n for n in names if "daw" in n.lower() and "launch" in n.lower()), None)
+        # Last resort for unknown port names, but never a Launchkey's DAW port
+        return next((n for n in names if "daw" in n.lower() and "launch" in n.lower()
+                     and "launchkey" not in n.lower()), None)
 
     def connect(self):
         """Open the DAW ports and enter DAW mode. Returns False if the device isn't there."""
@@ -171,6 +173,10 @@ class LaunchControlXL3:
             self._sysex([0x06, SCREEN_STATIONARY, field] + ascii7(text))
         self._sysex([0x04, SCREEN_STATIONARY, 0x7F])
 
+    def screen_off(self):
+        """Blank the stationary display (all fields empty) to spare the OLED."""
+        self.screen("", "", "")
+
     def pending(self):
         if not self.inp:
             return []
@@ -190,69 +196,8 @@ class LaunchControlXL3:
         self.disconnect()
 
 
-# ----------------------------------------------------------------- helpers --
-
-LOG_PATH = None
-
-
-def log(text):
-    """Print, and append to --log file (pythonw has no console)."""
-    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}"
-    if sys.stdout:
-        print(line, flush=True)
-    if LOG_PATH:
-        try:
-            with open(LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except OSError:
-            pass
-
-
-def scale(rgb, k):
-    return tuple(c * k for c in rgb)
-
-
-def lerp(a, b, k):
-    return tuple(x + (y - x) * k for x, y in zip(a, b))
-
-
 def blank():
     return [[0.0] * COLS for _ in range(ROWS)]
-
-
-def clamp01(x):
-    return max(0.0, min(1.0, x))
-
-
-def smoothstep(lo, hi, x):
-    k = clamp01((x - lo) / (hi - lo))
-    return k * k * (3 - 2 * k)
-
-
-# ------------------------------------------------------------------ themes --
-
-class Theme:
-    """Maps brightness 0..1 to colour: black -> shadow -> mid -> highlight."""
-
-    def __init__(self, name, shadow, mid, highlight):
-        self.name = name
-        self.stops = [(0.0, BLACK), (0.3, shadow), (0.68, mid), (1.0, highlight)]
-
-    def color(self, i):
-        i = clamp01(i)
-        for (p0, c0), (p1, c1) in zip(self.stops, self.stops[1:]):
-            if i <= p1:
-                return lerp(c0, c1, (i - p0) / (p1 - p0))
-        return self.stops[-1][1]
-
-
-THEMES = [
-    Theme("amber",  (0.50, 0.10, 0.00), (0.95, 0.42, 0.06), (1.00, 0.80, 0.50)),
-    Theme("ice",    (0.02, 0.12, 0.40), (0.10, 0.55, 0.65), (0.70, 0.92, 1.00)),
-    Theme("mono",   (0.45, 0.38, 0.30), (0.80, 0.70, 0.55), (1.00, 0.92, 0.80)),
-    Theme("indigo", (0.18, 0.05, 0.50), (0.35, 0.35, 0.85), (0.80, 0.75, 1.00)),
-    Theme("moss",   (0.05, 0.30, 0.08), (0.40, 0.65, 0.30), (0.95, 0.92, 0.70)),
-]
 
 
 # ----------------------------------------------------------------- effects --
@@ -267,6 +212,22 @@ class Effect:
 
     def frame(self, t, dt):
         raise NotImplementedError
+
+
+def draw_streak(grid, x, y, peak=1.0, tail=1.2, slope=0.0, up=False):
+    """A soft drop head at row y with a fading tail behind it, max-blended into grid.
+    x may be fractional (split across two columns); slope = columns per row along the tail."""
+    for r in range(ROWS):
+        behind = (r - y) if up else (y - r)
+        i = peak * (math.exp(-behind / tail) if behind >= 0 else math.exp(-behind * behind / 0.15))
+        if i < 0.01:
+            continue
+        cx = x - behind * slope
+        c0 = math.floor(cx)
+        f = cx - c0
+        for c, w in ((c0, 1 - f), (c0 + 1, f)):
+            if 0 <= c < COLS and w > 0:
+                grid[r][c] = max(grid[r][c], i * w)
 
 
 class Constellation(Effect):
@@ -285,7 +246,7 @@ class Constellation(Effect):
             self.stars.append([r, c, t, random.uniform(2.0, 5.0), random.uniform(0.6, 1.0)])
         grid = blank()
         for r, c, start, duration, peak in self.stars:
-            grid[r][c] = peak * math.sin(math.pi * (t - start) / duration) ** 2
+            grid[r][c] = peak * envelope(t - start, duration)
         return grid
 
 
@@ -303,133 +264,51 @@ class Drift(Effect):
         self.drops = [d for d in self.drops if d[1] < ROWS + 4]
         grid = blank()
         for c, y, _ in self.drops:
-            for r in range(ROWS):
-                behind = y - r
-                i = math.exp(-behind / 1.2) if behind >= 0 else math.exp(-behind * behind / 0.15)
-                grid[r][c] = max(grid[r][c], i)
+            draw_streak(grid, c, y)
         return grid
 
 
-class Interference(Effect):
-    name = "interference"
-
-    def frame(self, t, dt):
-        sources = [(CENTER_R + 2.5 * math.sin(t * 0.21), CENTER_C + 4.5 * math.cos(t * 0.17)),
-                   (CENTER_R + 2.5 * math.cos(t * 0.13), CENTER_C + 4.5 * math.sin(t * 0.19 + 2))]
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                v = sum(math.sin(math.hypot(r - sr, c - sc) * 1.4 - t * 2) for sr, sc in sources)
-                grid[r][c] = smoothstep(0.45, 0.95, (v + 2) / 4)
-        return grid
-
-
-class Lighthouse(Effect):
-    name = "lighthouse"
-
-    def frame(self, t, dt):
-        beam = t * 1.2
-        grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                dy, dx = (r - CENTER_R) * 1.3, c - CENTER_C
-                behind = (beam - math.atan2(dy, dx)) % (2 * math.pi)  # radians since the beam passed
-                ahead = 2 * math.pi - behind
-                i = max(math.exp(-behind / 0.9), math.exp(-ahead / 0.12))
-                grid[r][c] = i * (0.55 + 0.45 * min(1.0, math.hypot(dy, dx) / 3))
-        return grid
-
-
-class Sonar(Effect):
-    name = "sonar"
-    PERIOD = 4.0
-    TARGETS = 5
+class Showers(Effect):
+    """Drift whose density wanders: long calm spells with a few drops, then gentle downpours."""
+    name = "showers"
 
     def __init__(self):
-        self.echo = blank()
-        self.targets = set()
-        self.ping = None
+        self.drops = []  # [col, y, speed]
 
     def frame(self, t, dt):
-        ping = int(t // self.PERIOD)
-        if ping != self.ping:  # new ping: the hidden targets have moved
-            self.ping = ping
-            cells = [(r, c) for r in range(ROWS) for c in range(COLS)]
-            self.targets = set(random.sample(cells, self.TARGETS))
-        radius = (t % self.PERIOD) * 2.2
-        fade = math.exp(-dt / 1.2)
+        weather = 0.5 + 0.3 * math.sin(t * 0.031) + 0.2 * math.sin(t * 0.017 + 2.0)  # 0..1, minutes-long
+        rain = smoothstep(0.45, 0.9, weather)
+        if random.random() < dt * (0.35 + 5.0 * rain):
+            self.drops.append([random.randrange(COLS), -1.0, random.uniform(1.5, 3.0) + rain])
+        for d in self.drops:
+            d[1] += d[2] * dt
+        self.drops = [d for d in self.drops if d[1] < ROWS + 4]
         grid = blank()
-        for r in range(ROWS):
-            for c in range(COLS):
-                d = math.hypot((r - CENTER_R) * 1.3, c - CENTER_C)
-                ring = math.exp(-((d - radius) / 0.45) ** 2)
-                if (r, c) in self.targets and ring > 0.5:
-                    self.echo[r][c] = 1.0
-                self.echo[r][c] *= fade
-                grid[r][c] = max(0.5 * ring, self.echo[r][c])
+        for c, y, _ in self.drops:
+            draw_streak(grid, c, y)
         return grid
 
 
-class Meteors(Effect):
-    name = "meteors"
+class Haze(Effect):
+    """Constellation over a very faint glow that drifts independently in every cell, so it's never fully black."""
+    name = "haze"
 
     def __init__(self):
-        self.stars = [(random.randrange(ROWS), random.randrange(COLS), random.uniform(0, 6)) for _ in range(5)]
-        self.meteors = []  # [x, y, vx, vy]
+        self.sky = Constellation()
+        self.waves = [[(random.uniform(0.08, 0.25), random.uniform(0, 2 * math.pi)) for _ in range(COLS)]
+                      for _ in range(ROWS)]
 
     def frame(self, t, dt):
-        if random.random() < dt * 0.5:
-            vx = random.choice((-1, 1)) * random.uniform(5.0, 8.0)
-            self.meteors.append([-1.0 if vx > 0 else float(COLS), random.uniform(-1.0, 1.0),
-                                 vx, random.uniform(1.5, 3.0)])
-        for m in self.meteors:
-            m[0] += m[2] * dt
-            m[1] += m[3] * dt
-        self.meteors = [m for m in self.meteors if -4 < m[0] < COLS + 4 and m[1] < ROWS + 2]
-        grid = blank()
-        for r, c, phase in self.stars:
-            grid[r][c] = 0.12 + 0.08 * math.sin(t * 1.3 + phase)
-        for x, y, vx, vy in self.meteors:
-            v = math.hypot(vx, vy)
-            ux, uy = vx / v, vy / v
-            for r in range(ROWS):
-                for c in range(COLS):
-                    px, py = c - x, r - y
-                    behind = -(px * ux + py * uy)   # distance behind the head along the path
-                    across = px * uy - py * ux
-                    head = math.exp(-behind / 1.3) if behind >= 0 else math.exp(-behind * behind / 0.08)
-                    grid[r][c] = max(grid[r][c], head * math.exp(-across * across / 0.2))
-        return grid
-
-
-class Pendulum(Effect):
-    name = "pendulum"
-    CYCLE = 40.0  # seconds until all columns line up again
-
-    def frame(self, t, dt):
-        grid = blank()
-        for c in range(COLS):
-            y = CENTER_R + CENTER_R * math.cos(2 * math.pi * (10 + c) * t / self.CYCLE)
-            for r in range(ROWS):
-                grid[r][c] = math.exp(-((r - y) / 0.45) ** 2)
-        return grid
-
-
-class Spiral(Effect):
-    name = "spiral"
-
-    def frame(self, t, dt):
-        twist = 1.4 + 0.5 * math.sin(t * 0.23)
-        grid = blank()
+        grid = self.sky.frame(t, dt)
         for r in range(ROWS):
             for c in range(COLS):
-                dy, dx = (r - CENTER_R) * 1.3, c - CENTER_C
-                v = math.cos(2 * math.atan2(dy, dx) + math.hypot(dy, dx) * twist - t * 1.6)
-                grid[r][c] = smoothstep(0.55, 0.95, v)
+                freq, phase = self.waves[r][c]
+                glow = 0.08 + 0.16 * (0.5 + 0.5 * math.sin(t * freq + phase))
+                grid[r][c] = max(grid[r][c], glow)
         return grid
 
 
-EFFECTS = [Constellation, Drift, Interference, Lighthouse, Sonar, Meteors, Pendulum, Spiral]
+EFFECTS = [Constellation, Drift, Showers, Haze]
 XFADE = 1.5  # seconds to crossfade between effects
 
 
@@ -448,104 +327,9 @@ DEFAULTS = {
     "shuffle": False,
     "enabled": [cls.name for cls in EFFECTS],   # effects in the auto-loop / Play-Record cycle
     "power": True,
+    "screen_timeout": 30,      # seconds before the OLED blanks with no new info (0 = never)
+    "launchkey": {},           # Launchkey MK4 settings (defaults in launchkey_fx.DEFAULTS)
 }
-
-
-def load_config(path):
-    cfg = dict(DEFAULTS)
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
-    except (OSError, ValueError):
-        pass
-    return cfg
-
-
-def save_config(path, cfg):
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
-        os.replace(tmp, path)
-    except OSError as e:
-        log(f"Couldn't save settings: {e}")
-
-
-def hex_color(rgb):
-    return "#%02x%02x%02x" % tuple(round(255 * clamp01(v)) for v in rgb)
-
-
-# -------------------------------------------------------------- control ui --
-# Tiny local web server (stdlib only): http://127.0.0.1:8765
-# HTTP threads only queue commands and read the last published snapshot;
-# all device and effect state stays on the main thread.
-
-class ControlServer:
-    def __init__(self, port):
-        self.port = port
-        self.commands = queue.Queue()
-        self.snapshot = b"{}"
-        server = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args):  # pythonw has no stderr
-                pass
-
-            def _send(self, code, body, ctype):
-                self.send_response(code)
-                self.send_header("Content-Type", ctype)
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-
-            def _local(self):
-                # Reject DNS-rebinding tricks: only answer to our own host name
-                host = self.headers.get("Host", "")
-                return host in (f"127.0.0.1:{server.port}", f"localhost:{server.port}")
-
-            def do_GET(self):
-                if not self._local():
-                    return self._send(403, b"forbidden", "text/plain")
-                if self.path in ("/", "/index.html"):
-                    try:
-                        with open(UI_FILE, "rb") as f:
-                            self._send(200, f.read(), "text/html; charset=utf-8")
-                    except OSError:
-                        self._send(404, b"lcxl3_fx_ui.html not found next to lcxl3_fx.py", "text/plain")
-                elif self.path == "/api/state":
-                    self._send(200, server.snapshot, "application/json")
-                else:
-                    self._send(404, b"not found", "text/plain")
-
-            def do_POST(self):
-                # JSON only: a browser won't send that cross-origin without a CORS preflight we never answer
-                if (not self._local() or self.path != "/api/command"
-                        or not self.headers.get("Content-Type", "").startswith("application/json")):
-                    return self._send(400, b"bad request", "text/plain")
-                try:
-                    length = min(int(self.headers.get("Content-Length", 0)), 65536)
-                    cmd = json.loads(self.rfile.read(length))
-                except ValueError:
-                    return self._send(400, b"bad json", "text/plain")
-                if isinstance(cmd, dict):
-                    server.commands.put(cmd)
-                self._send(200, b'{"ok": true}', "application/json")
-
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-        self.httpd.daemon_threads = True
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-
-    def pending(self):
-        out = []
-        while True:
-            try:
-                out.append(self.commands.get_nowait())
-            except queue.Empty:
-                return out
-
-    def publish(self, data):
-        self.snapshot = json.dumps(data).encode()
 
 
 # -------------------------------------------------------------------- main --
@@ -566,15 +350,18 @@ def main():
     parser.add_argument("--fps", type=float, default=30.0, help="frames per second (default 30)")
     parser.add_argument("--port", help="part of the MIDI port name to use (default: auto-detect DAW port)")
     parser.add_argument("--no-screen", action="store_true", help="don't write to the OLED screen")
+    parser.add_argument("--screen-timeout", type=float, metavar="SEC",
+                        help="blank the OLED after SEC seconds without new info (0 = never, default 30)")
     parser.add_argument("--debug", action="store_true", help="print incoming MIDI messages")
     parser.add_argument("--list", action="store_true", help="list effects and themes and exit")
     parser.add_argument("--log", metavar="PATH", help="also append status messages to this file")
     parser.add_argument("--config", default=os.path.join(HERE, "lcxl3_fx.json"),
                         help="settings file (default: lcxl3_fx.json next to the script)")
     parser.add_argument("--ui-port", type=int, default=8765, help="control panel port (default 8765, 0 = off)")
+    parser.add_argument("--no-launchkey", action="store_true", help="leave a Launchkey MK4 alone")
+    parser.add_argument("--lk-port", help="part of the Launchkey MIDI port name (default: auto-detect DAW port)")
     args = parser.parse_args()
-    global LOG_PATH
-    LOG_PATH = args.log
+    fxcore.LOG_PATH = args.log
 
     effects = [cls() for cls in EFFECTS]
     if args.list:
@@ -586,9 +373,13 @@ def main():
             print(f"  - {theme.name}")
         return
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, DEFAULTS)
+    if not isinstance(cfg["launchkey"], dict):
+        cfg["launchkey"] = {}
     if args.auto is not None:
         cfg["loop_seconds"] = args.auto * 60
+    if args.screen_timeout is not None:
+        cfg["screen_timeout"] = max(0.0, args.screen_timeout)
     names = [e.name for e in effects]
     index = find_by_name(effects, args.effect, "effect") if args.effect else (
         names.index(cfg["effect"]) if cfg["effect"] in names else 0)
@@ -600,7 +391,7 @@ def main():
     ui = None
     if args.ui_port:
         try:
-            ui = ControlServer(args.ui_port)
+            ui = ControlServer(args.ui_port, UI_FILE)
             log(f"Control panel: http://127.0.0.1:{args.ui_port}")
         except OSError as e:
             log(f"Control panel disabled - port {args.ui_port} unavailable ({e})")
@@ -622,6 +413,7 @@ def main():
     loop_from = switched_at          # auto-loop timer start
     power_k = 1.0 if cfg["power"] else 0.0
     dirty_at = None                  # when settings last changed (saved shortly after)
+    screen_at = None                 # when the OLED was last written (None = blank / not in use)
 
     def changed():
         nonlocal dirty_at
@@ -632,11 +424,17 @@ def main():
                    speed=round(speed, 3), brightness=round(brightness, 3))
         save_config(args.config, cfg)
 
+    def show_screen():
+        nonlocal screen_at
+        if not args.no_screen:
+            name, theme = effects[index].name, THEMES[theme_index].name
+            dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
+            screen_at = time.perf_counter()
+
     def announce():
         name, theme = effects[index].name, THEMES[theme_index].name
         log(f"Effect {index + 1}: {name}  theme: {theme}  (speed x{speed:.1f})")
-        if not args.no_screen:
-            dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
+        show_screen()
 
     def select(new):
         nonlocal index, prev_index, switched_at, loop_from
@@ -700,7 +498,7 @@ def main():
         ui.publish({
             "connected": dev.connected,
             "effects": names,
-            "themes": [{"name": th.name, "colors": [hex_color(c) for _, c in th.stops[1:]]} for th in THEMES],
+            "themes": themes_for_ui(),
             "index": index,
             "theme": THEMES[theme_index].name,
             "speed": speed,
@@ -711,6 +509,7 @@ def main():
             "power": cfg["power"],
             "next_in": max(0.0, loop - (now - loop_from)) if loop > 0 else None,
             "leds": [hex_color(rgb) for row in current for rgb in row],
+            "launchkey": rig.state() if rig else None,
         })
 
     def compose(dt):
@@ -734,6 +533,9 @@ def main():
                 current[r][c] = rgb
                 dev.set_rgb(GRID_CC[r][c], rgb if max(rgb) > 0.03 else BLACK)
 
+    rig = None if args.no_launchkey else LaunchkeyRig(
+        cfg["launchkey"], cfg, changed, port=args.lk_port, no_screen=args.no_screen, debug=args.debug)
+
     announce()
     start = last = checked_at = retry_at = published_at = time.perf_counter()
     was_connected = dev.connected
@@ -745,7 +547,11 @@ def main():
 
             for cmd in ui.pending() if ui else []:
                 try:
-                    apply(cmd)
+                    if cmd.get("device") == "launchkey":
+                        if rig:
+                            rig.apply(cmd)
+                    else:
+                        apply(cmd)
                 except (TypeError, ValueError, KeyError):
                     pass
             if dirty_at and now - dirty_at > 1.0:
@@ -772,9 +578,12 @@ def main():
                         was_connected = True
                         current = [[BLACK] * COLS for _ in range(ROWS)]
                         announce()
-                        start = last = checked_at = time.perf_counter()
-                        continue
-                time.sleep(0.1)
+                        start = checked_at = time.perf_counter()
+            if not dev.connected:
+                if rig:
+                    rig.tick(now)
+                time.sleep(max(0.0, (frame_time if rig and rig.dev.connected else 0.1)
+                               - (time.perf_counter() - now)))
                 continue
 
             for msg in dev.pending():
@@ -784,6 +593,8 @@ def main():
                     print("in:", msg)
                 if msg.type != "control_change":
                     continue
+                if screen_at is None:
+                    show_screen()    # touching a control wakes the blanked screen
                 if msg.channel == CH_ANALOG and msg.control == CC_FADER_1:
                     speed = 0.2 + msg.value / 127 * 2.8
                     changed()
@@ -799,8 +610,8 @@ def main():
                 elif msg.channel == CH_BUTTONS and msg.value > 0:
                     if 37 <= msg.control <= 44:
                         pulses[msg.control - 37] = 1.0
-                    elif 45 <= msg.control <= 52:
-                        select(min(msg.control - 45, len(effects) - 1))
+                    elif 45 <= msg.control < 45 + len(effects):
+                        select(msg.control - 45)
                     elif msg.control in (CC_PLAY, CC_RECORD):
                         step(1 if msg.control == CC_PLAY else -1)
                 elif msg.channel == CH_FEATURES and msg.control == CC_MODE_REPORT and msg.value not in (1, 2):
@@ -809,11 +620,18 @@ def main():
             if cfg["loop_seconds"] > 0 and now - loop_from > cfg["loop_seconds"]:
                 advance()
 
+            timeout = float(cfg["screen_timeout"])
+            if screen_at is not None and timeout > 0 and now - screen_at > timeout:
+                dev.screen_off()
+                screen_at = None
+
             t += dt * speed
             power_k += ((1.0 if cfg["power"] else 0.0) - power_k) * (1 - math.exp(-dt * 3))
             fade_in = smoothstep(0.0, 1.5, now - start)
             render(compose(dt), fade_in * power_k, dt)
             pulses = [p * math.exp(-dt / 0.35) for p in pulses]
+            if rig:
+                rig.tick(now)
 
             time.sleep(max(0.0, frame_time - (time.perf_counter() - now)))
     except KeyboardInterrupt:
@@ -821,20 +639,30 @@ def main():
     finally:
         if dirty_at:
             save()
-        if dev.connected:
+        if rig:
+            rig.begin_exit()
+        if dev.connected or (rig and rig.dev.connected):
             try:
                 fade_start = last = time.perf_counter()
                 while (now := time.perf_counter()) - fade_start < 1.0:
                     dt, last = now - last, now
                     t += dt * speed
-                    render(compose(dt), (1 - smoothstep(0.0, 1.0, now - fade_start)) * power_k, dt)
+                    if dev.connected:
+                        render(compose(dt), (1 - smoothstep(0.0, 1.0, now - fade_start)) * power_k, dt)
+                    if rig:
+                        rig.tick(now)
                     time.sleep(frame_time)
             except KeyboardInterrupt:
                 pass
+        if dev.connected:
             dev.all_off()
+            if screen_at is not None:
+                dev.screen_off()
             dev.daw_mode(False)
         dev.close()
-        log("LEDs off, device back in standalone mode. Bye!")
+        if rig:
+            rig.close()
+        log("LEDs off, devices back in standalone mode. Bye!")
 
 
 if __name__ == "__main__":

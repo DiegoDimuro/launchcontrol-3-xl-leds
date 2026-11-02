@@ -87,18 +87,42 @@
   @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
   .offline main > :not(header) { opacity: .55; }
   .muted { color: var(--muted); }
+
+  /* tabs */
+  .tabs { display: inline-flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 3px; }
+  .tabs button { border: 0; border-radius: 8px; padding: 6px 12px; }
+  .tabs button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .tab { display: grid; gap: 16px; }
+  .tab[hidden] { display: none; }
+
+  /* launchkey mirror */
+  .lk { background: var(--device); border-radius: 12px; padding: 14px; display: grid; gap: 14px; }
+  .pads { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
+  .pad { aspect-ratio: 1; border-radius: 7px; background: #000; box-shadow: inset 0 0 0 2px var(--socket);
+         cursor: pointer; transition: background .06s linear; touch-action: manipulation; }
+  .pad:hover { outline: 1px solid #fff4; }
+  .lk-buttons { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+  .lkb { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #bdb6ab; min-width: 0; }
+  .lkb i { flex: none; width: 16px; height: 9px; border-radius: 3px; background: #000; box-shadow: inset 0 0 0 1px var(--socket); }
+  .lkb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
 <main>
   <header>
     <h1>LED FX</h1>
+    <div class="tabs" role="tablist">
+      <button data-tab="xl" role="tab">Launch Control XL 3</button>
+      <button data-tab="lk" role="tab">Launchkey 25</button>
+    </div>
     <span id="status" class="pill">connecting…</span>
     <span class="spacer"></span>
-    <label class="switch" title="Fade the LEDs out without stopping the service">
+    <label class="switch" title="Fade this device's LEDs out without stopping the service">
       <input type="checkbox" id="power"> <span>LEDs on</span>
     </label>
   </header>
+
+  <div class="tab" id="tab-xl">
 
   <section class="top">
     <div class="card">
@@ -150,12 +174,84 @@
     </div>
     <div class="hint">The faders on the device still work too; this page follows them.</div>
   </section>
+  </div>
+
+  <div class="tab" id="tab-lk" hidden>
+  <section class="top">
+    <div class="card">
+      <h2>Live view</h2>
+      <div class="lk">
+        <div class="pads" id="lkPads"></div>
+        <div class="lk-buttons" id="lkButtons"></div>
+      </div>
+      <div class="hint">Mirror of the 16 pads and the button LEDs. Click a pad to hit it: near the top of the pad is a hard hit, near the bottom a soft one.</div>
+    </div>
+    <div class="card now">
+      <h2>Now playing</h2>
+      <div>
+        <div class="now-name" id="lkNowName">—</div>
+        <div class="now-sub" id="lkNowSub"></div>
+      </div>
+      <div class="row">
+        <button id="lkPrev">◀ Prev</button>
+        <button id="lkNext" class="primary">Next ▶</button>
+      </div>
+      <div>
+        <h2 style="margin-top:8px">Loop</h2>
+        <div class="seg" id="lkLoopSeg"></div>
+        <div class="row" style="margin-top:10px">
+          <span class="muted">Custom</span>
+          <input type="number" id="lkLoopCustom" min="0" step="0.5"> <span class="muted">min</span>
+          <span class="spacer"></span>
+          <label class="switch"><input type="checkbox" id="lkShuffle"> <span>Shuffle</span></label>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="margin-bottom:12px">
+      <h2 style="margin:0">Effects</h2>
+      <span class="muted" id="lkEnabledCount"></span>
+      <span class="spacer"></span>
+      <button id="lkAllOn">All</button>
+      <button id="lkAllOff">None</button>
+    </div>
+    <div class="effects" id="lkEffects"></div>
+    <div class="hint">Every effect plays on its own and reacts to the pads: hit harder for more light, hold a pad to keep it glowing. Track ◀ ▶ on the device switch effects.</div>
+  </section>
+
+  <section class="card">
+    <h2>Look</h2>
+    <div class="themes" id="lkThemes"></div>
+    <div class="sliders">
+      <div class="slider"><label for="lkSpeed">Speed</label><input type="range" id="lkSpeed" min="0.2" max="3" step="0.05"><output id="lkSpeedOut"></output></div>
+      <div class="slider"><label for="lkBrightness">Brightness</label><input type="range" id="lkBrightness" min="0.05" max="1" step="0.01"><output id="lkBrightnessOut"></output></div>
+      <div class="slider"><label for="lkDecay">Decay</label><input type="range" id="lkDecay" min="0.3" max="3" step="0.05"><output id="lkDecayOut"></output></div>
+      <div class="slider"><label for="lkTrail">Trail</label><input type="range" id="lkTrail" min="1" max="7" step="1"><output id="lkTrailOut"></output></div>
+    </div>
+    <div class="hint">Decay: how long hits linger. Trail: tail length in pads for Scanner and Orbits. On the device: encoders 1–5 = speed, brightness, theme, decay, trail · Page ▲▼ = theme · Pad bank ▲▼ = trail.</div>
+  </section>
+  </div>
 </main>
 
 <script>
 const LOOPS = [[0, "Off"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [300, "5 min"], [600, "10 min"], [1800, "30 min"]];
 const $ = id => document.getElementById(id);
-let state = null, built = false, dragging = null, lastOk = 0;
+let state = null, built = false, dragging = null, lastOk = 0, lkBuilt = false;
+let tab = "xl";
+try { if (localStorage.getItem("tab") === "lk") tab = "lk"; } catch (e) {}
+
+function showTab(name) {
+  tab = name;
+  try { localStorage.setItem("tab", name); } catch (e) {}
+  for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("on", b.dataset.tab === name);
+  $("tab-xl").hidden = name !== "xl";
+  $("tab-lk").hidden = name !== "lk";
+  if (state) render(state);
+}
+for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
+const lkSend = cmd => send({ device: "launchkey", ...cmd });
 
 async function send(cmd) {
   try {
@@ -213,7 +309,7 @@ function build(s) {
   }
   $("loopCustom").onchange = e => send({ loop_seconds: Math.max(0, +e.target.value) * 60 });
   $("shuffle").onchange = e => send({ shuffle: e.target.checked });
-  $("power").onchange = e => send({ power: e.target.checked });
+  $("power").onchange = e => (tab === "lk" ? lkSend : send)({ power: e.target.checked });
   $("prev").onclick = () => send({ step: -1 });
   $("next").onclick = () => send({ step: 1 });
   $("allOn").onclick = () => send({ enabled: s.effects });
@@ -221,11 +317,120 @@ function build(s) {
   built = true;
 }
 
-const fmt = (id, v) => id === "speed" ? `×${v.toFixed(1)}` : `${Math.round(v * 100)}%`;
+const fmt = (id, v) => id === "speed" || id === "decay" ? `×${v.toFixed(1)}`
+  : id === "trail" ? `${v} pads` : `${Math.round(v * 100)}%`;
 const dur = s => s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : `${Math.ceil(s)} s`;
+
+const LK_SLIDERS = [["lkSpeed", "speed"], ["lkBrightness", "brightness"], ["lkDecay", "decay"], ["lkTrail", "trail"]];
+
+function lkBuild(s, k) {
+  const pads = $("lkPads");
+  for (let i = 0; i < 16; i++) {
+    const d = document.createElement("div");
+    d.className = "pad";
+    d.onpointerdown = e => {
+      const r = d.getBoundingClientRect();
+      const velocity = Math.max(0.1, Math.min(1, 1 - (e.clientY - r.top) / r.height));
+      lkSend({ hit: { row: Math.floor(i / 8), col: i % 8, velocity } });
+    };
+    pads.appendChild(d);
+  }
+  const btns = $("lkButtons");
+  for (const b of k.buttons) {
+    const el = document.createElement("div");
+    el.className = "lkb";
+    el.innerHTML = "<i></i><span></span>";
+    el.querySelector("span").textContent = b.label;
+    el.title = b.rgb ? "RGB button (palette colour)" : "White button";
+    btns.appendChild(el);
+  }
+  const seg = $("lkLoopSeg");
+  for (const [sec, label] of LOOPS) {
+    const b = document.createElement("button");
+    b.textContent = label; b.dataset.sec = sec;
+    b.onclick = () => lkSend({ loop_seconds: sec });
+    seg.appendChild(b);
+  }
+  const fx = $("lkEffects");
+  k.effects.forEach((name, i) => {
+    const el = document.createElement("div");
+    el.className = "fx";
+    el.innerHTML = `<button class="fx-play"><span class="fx-num">Effect ${i + 1}</span><span class="fx-name"></span></button><input type="checkbox" title="In the loop">`;
+    el.querySelector(".fx-name").textContent = name;
+    el.querySelector(".fx-play").onclick = () => lkSend({ select: i });
+    el.querySelector("input").onchange = e => {
+      const on = new Set(state.launchkey.enabled);
+      e.target.checked ? on.add(name) : on.delete(name);
+      lkSend({ enabled: [...on] });
+    };
+    fx.appendChild(el);
+  });
+  const th = $("lkThemes");
+  for (const t of s.themes) {
+    const b = document.createElement("button");
+    b.className = "theme"; b.dataset.name = t.name;
+    b.innerHTML = `<div class="swatch" style="background:linear-gradient(90deg,#000,${t.colors.join(",")})"></div><span>${t.name}</span>`;
+    b.onclick = () => lkSend({ theme: t.name });
+    th.appendChild(b);
+  }
+  for (const [id, key] of LK_SLIDERS) {
+    const input = $(id);
+    let timer = null;
+    input.addEventListener("pointerdown", () => dragging = id);
+    window.addEventListener("pointerup", () => { if (dragging === id) dragging = null; });
+    input.oninput = () => {
+      $(id + "Out").textContent = fmt(key, +input.value);
+      clearTimeout(timer);
+      timer = setTimeout(() => lkSend({ [key]: +input.value }), 60);
+    };
+  }
+  $("lkLoopCustom").onchange = e => lkSend({ loop_seconds: Math.max(0, +e.target.value) * 60 });
+  $("lkShuffle").onchange = e => lkSend({ shuffle: e.target.checked });
+  $("lkPrev").onclick = () => lkSend({ step: -1 });
+  $("lkNext").onclick = () => lkSend({ step: 1 });
+  $("lkAllOn").onclick = () => lkSend({ enabled: k.effects });
+  $("lkAllOff").onclick = () => lkSend({ enabled: [] });
+  lkBuilt = true;
+}
+
+function lkRender(s, k) {
+  if (!lkBuilt) lkBuild(s, k);
+  const pads = $("lkPads").children;
+  k.pads.forEach((c, i) => pads[i].style.background = c);
+  const btns = $("lkButtons").children;
+  k.buttons.forEach((b, i) => btns[i].querySelector("i").style.background = b.color);
+  $("lkNowName").textContent = k.effects[k.index];
+  const loopTxt = k.next_in == null ? "loop off" : `next in ${dur(k.next_in)}${k.shuffle ? " (shuffle)" : ""}`;
+  $("lkNowSub").textContent = `#${k.index + 1} · ${k.theme} · ${loopTxt}`;
+  for (const b of $("lkLoopSeg").children) b.classList.toggle("on", +b.dataset.sec === k.loop_seconds);
+  if (document.activeElement !== $("lkLoopCustom")) $("lkLoopCustom").value = k.loop_seconds ? +(k.loop_seconds / 60).toFixed(2) : "";
+  $("lkShuffle").checked = k.shuffle;
+  const enabledSet = new Set(k.enabled);
+  [...$("lkEffects").children].forEach((el, i) => {
+    const on = enabledSet.has(k.effects[i]);
+    el.classList.toggle("active", i === k.index);
+    el.classList.toggle("disabled", !on);
+    el.querySelector("input").checked = on;
+  });
+  $("lkEnabledCount").textContent = k.enabled.length ? `${k.enabled.length} of ${k.effects.length} in loop` : "none checked — loop uses all";
+  for (const b of $("lkThemes").children) b.classList.toggle("on", b.dataset.name === k.theme);
+  for (const [id, key] of LK_SLIDERS) {
+    if (dragging !== id) { $(id).value = k[key]; $(id + "Out").textContent = fmt(key, k[key]); }
+  }
+}
 
 function render(s) {
   if (!built) build(s);
+  const k = s.launchkey;
+  document.querySelector('.tabs [data-tab="lk"]').hidden = !k;
+  if (k) lkRender(s, k);
+  if (tab === "lk" && k) {
+    const status = $("status");
+    status.textContent = !k.connected ? "Waiting for Launchkey…" : k.paused ? "Pads in another mode" : "Launchkey connected";
+    status.className = "pill " + (k.connected && !k.paused ? "ok" : "warn");
+    $("power").checked = k.power;
+    return;
+  }
   const leds = $("device").children;
   s.leds.forEach((c, i) => leds[i].style.background = c);
 
@@ -266,7 +471,8 @@ async function poll() {
   document.body.classList.toggle("offline", Date.now() - lastOk > 3000);
   if (Date.now() - lastOk > 3000) { $("status").textContent = "Service not running"; $("status").className = "pill warn"; }
 }
-setInterval(poll, 150);
+showTab(tab);
+setInterval(poll, 100);
 poll();
 </script>
 </body>
