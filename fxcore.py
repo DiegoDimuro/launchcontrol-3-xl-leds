@@ -56,6 +56,18 @@ def envelope(age, duration):
     return math.sin(math.pi * age / duration) ** 2
 
 
+def breathe(t, period, phase=0.0):
+    """0..1, slow in and out, lingering a little at the bottom."""
+    return (0.5 - 0.5 * math.cos(2 * math.pi * (t / period + phase))) ** 1.6
+
+
+def rec_blink(now, period=1.0):
+    """Studio REC light: on for half the period, off for the other half, with barely softened edges.
+    Uses wall-clock time so the speed setting doesn't change it."""
+    x = (now / period) % 1.0
+    return smoothstep(0.0, 0.04, x) * (1 - smoothstep(0.5, 0.54, x))
+
+
 def to7bit(v):
     """0..1 float -> 0..127 with gamma, for LED levels."""
     return max(0, min(127, round(127 * (clamp01(v) ** GAMMA))))

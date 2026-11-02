@@ -128,7 +128,8 @@
     <div class="card">
       <h2>Live view</h2>
       <div class="device" id="device"></div>
-      <div class="hint">Mirror of the 40 LEDs. Click a button-row LED to send a swell down that column.</div>
+      <div class="lk-buttons" id="xlButtons" style="margin-top:10px"></div>
+      <div class="hint">Mirror of the 40 LEDs and the side buttons. Click a button-row LED to send a swell down that column.</div>
     </div>
     <div class="card now">
       <h2>Now playing</h2>
@@ -267,6 +268,13 @@ function build(s) {
     d.className = "led" + (i >= 24 ? " btn" : "");
     if (i >= 24) d.onclick = () => send({ pulse: i % 8 });
     dev.appendChild(d);
+  }
+  for (const b of s.buttons || []) {
+    const el = document.createElement("div");
+    el.className = "lkb";
+    el.innerHTML = "<i></i><span></span>";
+    el.querySelector("span").textContent = b.label;
+    $("xlButtons").appendChild(el);
   }
   const seg = $("loopSeg");
   for (const [sec, label] of LOOPS) {
@@ -433,6 +441,8 @@ function render(s) {
   }
   const leds = $("device").children;
   s.leds.forEach((c, i) => leds[i].style.background = c);
+  const xlb = $("xlButtons").children;
+  (s.buttons || []).forEach((b, i) => { if (xlb[i]) xlb[i].querySelector("i").style.background = b.color; });
 
   const status = $("status");
   status.textContent = s.connected ? "Device connected" : "Waiting for device…";

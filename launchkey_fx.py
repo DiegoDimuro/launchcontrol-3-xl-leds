@@ -25,7 +25,7 @@ import time
 
 import mido
 
-from fxcore import (BLACK, THEMES, THEME_NAMES, clamp01, hex_color, lerp, log, scale,
+from fxcore import (BLACK, THEMES, THEME_NAMES, breathe, clamp01, hex_color, lerp, log, rec_blink, scale,
                     smoothstep, to7bit)
 
 # ---------------------------------------------------------------- protocol --
@@ -605,6 +605,8 @@ class LaunchkeyRig:
                 base = 21 if msg.control in ENCODERS_ABS else 85
                 self.encoder(msg.control - base, msg.value - 64)
             elif msg.channel == CH_BUTTONS and msg.value > 0:
+                if msg.control in self.buttons:
+                    self.flash(msg.control, 1.0)
                 if self.screen_at is None:
                     self.show_screen()
                 if msg.control == TRACK_LEFT:
@@ -648,30 +650,30 @@ class LaunchkeyRig:
                 if not self.paused:
                     self.dev.set_pad(PAD_NOTES[r][c], rgb if max(rgb) > 0.02 else BLACK)
 
-        # Buttons echo the grid: the 4+4 utility/transport buttons follow column pairs,
-        # the left-side buttons the rows and edges, and the flashes from the effect.
-        f = self.flashes
-        col = [max(grid[0][c], grid[1][c]) for c in range(COLS)]
-        pair = [max(col[2 * i], col[2 * i + 1]) for i in range(4)]
-        energy = sum(col) / COLS
-        mono = {
-            TRACK_LEFT: max(0.6 * col[0], f.get("left", 0)),
-            TRACK_RIGHT: max(0.6 * col[-1], f.get("right", 0)),
-            PAGE_UP: 0.5 * max(grid[0]), PAGE_DOWN: 0.5 * max(grid[1]),
-            BANK_UP: 0.08 + 0.4 * energy, BANK_DOWN: 0.08 + 0.4 * energy,
-        }
+        # Buttons run their own slow loop, apart from the pads: each arrow pair takes turns
+        # (one on, one off, the pairs staggered), the utility row breathes in a wave, Play stays
+        # lit, Record blinks like a studio REC light, Stop and Loop breathe in turn, and
+        # Function / Scene breathe in the theme colour. Pressing a button flashes it.
+        f, t = self.flashes, self.t
+        mono = {}
+        for p, (one, other) in enumerate(((TRACK_LEFT, TRACK_RIGHT), (PAGE_UP, PAGE_DOWN), (BANK_UP, BANK_DOWN))):
+            a = 0.5 + 0.5 * math.cos(2 * math.pi * (t / 2.4 + p / 3))
+            mono[one], mono[other] = 0.03 + 0.75 * a ** 3, 0.03 + 0.75 * (1 - a) ** 3
         for i, cc in enumerate(UTILITY):
-            mono[cc] = 0.55 * pair[i]
-        for i, cc in enumerate(TRANSPORT):
-            mono[cc] = max(0.35 * pair[i], 0.9 * f.get("hit", 0))
-        mono[76] = max(mono[76], f.get("beat", 0))   # Metronome
+            mono[cc] = 0.04 + 0.5 * breathe(t, 6.0, -i / 8)
+        mono[115] = 0.8                                   # Play
+        mono[117] = rec_blink(time.perf_counter())        # Record, in step with the XL 3's
+        mono[116] = 0.04 + 0.45 * breathe(t, 7.0)         # Stop
+        mono[118] = 0.04 + 0.45 * breathe(t, 7.0, 0.5)    # Loop
+        fast = 1 - math.exp(-dt * 40)
         for cc, v in mono.items():
-            v = clamp01(v) * level
-            self.buttons[cc] = lerp(self.buttons[cc], (v, v, v), ease)
+            v = clamp01(max(v, f.get(cc, 0))) * level
+            self.buttons[cc] = lerp(self.buttons[cc], (v, v, v), fast)
             self.dev.set_mono(cc, self.buttons[cc][0])
-        accent = clamp01(0.25 + energy + f.get("hit", 0) * 0.5)
-        for cc, k in ((FUNCTION, accent), (SCENE, clamp01(0.15 + 0.8 * max(f.values(), default=0)))):
-            index, shown = palette_index(scale(theme.color(0.55 + 0.45 * k), level * k))
+        # The two RGB arrow buttons breathe white, like the rest
+        for cc, phase in ((FUNCTION, 0.0), (SCENE, 0.5)):
+            v = clamp01(max(0.04 + 0.6 * breathe(t, 8.0, phase), f.get(cc, 0))) * level
+            index, shown = palette_index((v, v, v))
             self.buttons[cc] = shown
             self.dev.set_palette(cc, index)
         for name in list(f):

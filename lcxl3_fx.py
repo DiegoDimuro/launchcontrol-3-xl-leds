@@ -15,6 +15,8 @@ LED grid used here (control indices = DAW-mode CC numbers):
   row 2  encoders row 3     CC 29-36
   row 3  upper button row   CC 37-44
   row 4  lower button row   CC 45-52
+Side buttons (same RGB SysEx): Page up/down 106/107, Track left/right 103/102,
+Record 118, Play 116, Solo/Arm 65, Mute/Select 66, and the small button at 104.
 
 Effects produce a brightness value per LED; the active theme turns that into
 colour (shadow -> mid -> highlight), so every effect shares one palette.
@@ -23,6 +25,8 @@ Effects (lower buttons 1-4):
   1 constellation  2 drift  3 showers  4 haze
 Built as idle displays: sparse, one cell or column at a time, random timing,
 nothing sweeping the whole grid, slow fades.
+Side buttons have their own slow loop: the four arrows take turns around a circle,
+Record blinks red like a studio REC light, Play stays green, Solo/Arm and Mute/Select breathe in turn.
 Themes:   amber, ice, mono, indigo, moss, dusk, sea glass, slate, sand, tide, aurora
 
 Controls:
@@ -62,8 +66,8 @@ import time
 import mido
 
 import fxcore
-from fxcore import (BLACK, GAMMA, THEMES, ControlServer, clamp01, envelope, hex_color, lerp, load_config,
-                    log, save_config, scale, smoothstep, themes_for_ui)
+from fxcore import (BLACK, GAMMA, THEMES, ControlServer, breathe, clamp01, envelope, hex_color, lerp,
+                    load_config, log, rec_blink, save_config, scale, smoothstep, themes_for_ui)
 from launchkey_fx import LaunchkeyRig
 
 # ---------------------------------------------------------------- protocol --
@@ -78,6 +82,18 @@ CH_ANALOG = 15        # MIDI channel 16
 CC_FADER_1, CC_FADER_2, CC_FADER_3 = 5, 6, 7
 CC_PLAY, CC_RECORD = 116, 118
 CC_MODE_REPORT = 30
+
+# Side buttons with LEDs
+PAGE_UP, PAGE_DOWN = 106, 107
+TRACK_LEFT, TRACK_RIGHT = 103, 102
+SOLO_ARM, MUTE_SELECT, CC_104 = 65, 66, 104
+ARROWS = [PAGE_UP, TRACK_RIGHT, PAGE_DOWN, TRACK_LEFT]   # clockwise, for the chase
+SIDE_BUTTONS = ARROWS + [CC_RECORD, CC_PLAY, SOLO_ARM, MUTE_SELECT, CC_104]
+SIDE_LABELS = {
+    PAGE_UP: "Page up", PAGE_DOWN: "Page down", TRACK_LEFT: "Track <", TRACK_RIGHT: "Track >",
+    CC_RECORD: "Record", CC_PLAY: "Play", SOLO_ARM: "Solo/Arm", MUTE_SELECT: "Mute/Select", CC_104: "Button 104",
+}
+RED, GREEN = (1.0, 0.04, 0.02), (0.05, 1.0, 0.12)
 
 SCREEN_STATIONARY = 0x35
 
@@ -188,9 +204,8 @@ class LaunchControlXL3:
 
     def all_off(self):
         self._cache.clear()
-        for row in GRID_CC:
-            for cc in row:
-                self.set_rgb(cc, BLACK)
+        for cc in [cc for row in GRID_CC for cc in row] + SIDE_BUTTONS:
+            self.set_rgb(cc, BLACK)
 
     def close(self):
         self.disconnect()
@@ -308,6 +323,25 @@ class Haze(Effect):
         return grid
 
 
+def side_buttons(t, theme):
+    """Target colour (before brightness) of every side button at time t."""
+    out = {}
+    # Arrows: one light walks round the four arrows (up, right, down, left) with a short tail
+    lap = t / 3.2
+    for i, cc in enumerate(ARROWS):
+        d = (lap - i / 4) % 1.0                      # how long ago the light passed this arrow
+        k = math.exp(-d * 9) + math.exp(-(1 - d) * 40)   # sharp arrival, soft fade
+        out[cc] = scale(theme.color(0.35 + 0.65 * k), min(1.0, 0.06 + k))
+    # Record blinks like a studio REC light, Play stays lit
+    out[CC_RECORD] = scale(RED, rec_blink(time.perf_counter()))
+    out[CC_PLAY] = scale(GREEN, 0.8)
+    # Solo/Arm and Mute/Select breathe in turn, the small button barely glows
+    out[SOLO_ARM] = scale(theme.color(0.4 + 0.6 * breathe(t, 6.0)), 0.06 + 0.8 * breathe(t, 6.0))
+    out[MUTE_SELECT] = scale(theme.color(0.4 + 0.6 * breathe(t, 6.0, 0.5)), 0.06 + 0.8 * breathe(t, 6.0, 0.5))
+    out[CC_104] = scale(theme.color(0.7), 0.1 + 0.35 * breathe(t, 9.0, 0.25))
+    return out
+
+
 EFFECTS = [Constellation, Drift, Showers, Haze]
 XFADE = 1.5  # seconds to crossfade between effects
 
@@ -406,6 +440,8 @@ def main():
         log("(if it's plugged in but not listed above, pass --port \"<part of the name>\")")
 
     pulses = [0.0] * COLS
+    flashes = {}                     # side button cc -> 0..1, lit up when pressed
+    side = {cc: BLACK for cc in SIDE_BUTTONS}
     current = [[BLACK] * COLS for _ in range(ROWS)]  # eased colour actually shown
     t = 0.0
     frame_time = 1.0 / args.fps
@@ -512,6 +548,7 @@ def main():
             "power": cfg["power"],
             "next_in": max(0.0, loop - (now - loop_from)) if loop > 0 else None,
             "leds": [hex_color(rgb) for row in current for rgb in row],
+            "buttons": [{"label": SIDE_LABELS[cc], "color": hex_color(side[cc])} for cc in SIDE_BUTTONS],
             "launchkey": rig.state() if rig else None,
         })
 
@@ -535,6 +572,14 @@ def main():
                 rgb = lerp(current[r][c], target, ease)
                 current[r][c] = rgb
                 dev.set_rgb(GRID_CC[r][c], rgb if max(rgb) > 0.03 else BLACK)
+        ease_side = 1 - math.exp(-dt * 40)   # quick, so the REC blink stays crisp
+        for cc, rgb in side_buttons(t, theme).items():
+            k = flashes.get(cc, 0.0)
+            if k > 0:
+                rgb = lerp(rgb, theme.color(1.0), k)
+            rgb = lerp(side[cc], scale(rgb, brightness * fade), ease_side)
+            side[cc] = rgb
+            dev.set_rgb(cc, rgb if max(rgb) > 0.03 else BLACK)
 
     rig = None if args.no_launchkey else LaunchkeyRig(
         cfg["launchkey"], cfg, changed, port=args.lk_port, no_screen=args.no_screen, debug=args.debug)
@@ -580,6 +625,7 @@ def main():
                         log("Reconnected.")
                         was_connected = True
                         current = [[BLACK] * COLS for _ in range(ROWS)]
+                        side = {cc: BLACK for cc in SIDE_BUTTONS}
                         announce()
                         start = checked_at = time.perf_counter()
             if not dev.connected:
@@ -611,6 +657,8 @@ def main():
                         announce()
                         changed()
                 elif msg.channel == CH_BUTTONS and msg.value > 0:
+                    if msg.control in side:
+                        flashes[msg.control] = 1.0
                     if 37 <= msg.control <= 44:
                         pulses[msg.control - 37] = 1.0
                     elif 45 <= msg.control < 45 + len(effects):
@@ -633,6 +681,7 @@ def main():
             fade_in = smoothstep(0.0, 1.5, now - start)
             render(compose(dt), fade_in * power_k, dt)
             pulses = [p * math.exp(-dt / 0.35) for p in pulses]
+            flashes = {cc: k * math.exp(-dt / 0.3) for cc, k in flashes.items() if k > 0.01}
             if rig:
                 rig.tick(now)
 
