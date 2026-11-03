@@ -94,7 +94,7 @@ SIDE_LABELS = {
     CC_RECORD: "Record", CC_PLAY: "Play", SOLO_ARM: "Solo/Arm", MUTE_SELECT: "Mute/Select", CC_104: "Button 104",
 }
 RED, GREEN = (1.0, 0.04, 0.02), (0.05, 1.0, 0.12)
-WHITE = (0.6, 0.6, 0.6)
+WHITE = (1.0, 1.0, 1.0)
 
 SCREEN_STATIONARY = 0x35
 
