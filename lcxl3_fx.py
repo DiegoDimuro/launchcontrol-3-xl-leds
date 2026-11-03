@@ -18,23 +18,23 @@ LED grid used here (control indices = DAW-mode CC numbers):
 Side buttons (same RGB SysEx): Page up/down 106/107, Track left/right 103/102,
 Record 118, Play 116, Solo/Arm 65, Mute/Select 66, and the small button at 104.
 
-Effects produce a brightness value per LED; the active theme turns that into
-colour (shadow -> mid -> highlight), so every effect shares one palette.
-
-Effects (lower buttons 1-4):
-  1 constellation  2 drift  3 showers  4 haze
-Built as idle displays: sparse, one cell or column at a time, random timing,
-nothing sweeping the whole grid, slow fades.
+The XL 3 runs two independent layers, each with its own effect, theme, speed, brightness,
+loop and on/off (and its own control panel tab):
+  Encoders  (rows 0-2): constellation, drift, showers, haze, breath, lighthouse, tides,
+            fireflies, currents, veil - idle displays made for the 3 x 8 encoder grid:
+            sparse, slow, soft fades.
+  Mute/Solo (rows 3-4): the Launchkey's strip effects (strips.py): scanner, orbits, crossing,
+            wings - moving lights with a fading tail.
+Effects produce a brightness value per LED; the layer's theme turns that into
+colour (shadow -> mid -> highlight).
 Side buttons stay lit white, Play stays green, and Record blinks red like a studio REC light
 (1 s, not the effect speed). That blink is their only movement.
 Themes:   amber, ice, mono, indigo, moss, dusk, sea glass, slate, sand, tide, aurora
 
-Controls:
+Controls (the encoder layer; the mute/solo layer is set from the control panel):
   Fader 1              speed
   Fader 2              brightness
   Fader 3              theme (one zone per theme, bottom to top)
-  Lower button row     pick effect
-  Upper button row     soft swell on that column
   Play / Record        next / previous effect
   Ctrl+C               quit (fade out, device back to normal mode)
 
@@ -52,7 +52,7 @@ Run (each time):
 Unplugging is fine: the script waits for the device and picks up where it left off.
 Windows autostart: the "LCXL3-FX" scheduled task runs it with pythonw.exe at logon.
 Control panel: http://127.0.0.1:8765 (lcxl3_fx_ui.html) - effects, loop, theme, speed,
-brightness, on/off. Settings are kept in lcxl3_fx.json.
+brightness, on/off per layer. Settings are kept in lcxl3_fx.json.
 A Launchkey MK4, if plugged in, gets its own effects and panel tab (launchkey_fx.py).
 """
 
@@ -69,12 +69,16 @@ import fxcore
 from fxcore import (BLACK, GAMMA, THEMES, ControlServer, clamp01, envelope, hex_color, lerp,
                     load_config, log, rec_blink, save_config, scale, smoothstep, themes_for_ui)
 from launchkey_fx import LaunchkeyRig
+from strips import COLS as STRIP_COLS, ROWS as STRIP_ROWS, StripEngine
 
 # ---------------------------------------------------------------- protocol --
 
 HEADER = [0x00, 0x20, 0x29, 0x02, 0x15]
 ROWS, COLS = 5, 8
 GRID_CC = [list(range(13 + r * 8, 21 + r * 8)) for r in range(ROWS)]  # 13..52
+ENC_ROWS = 3                       # rows 0-2: the encoder layer
+STRIP_CC = GRID_CC[ENC_ROWS:]      # rows 3-4: the mute/solo layer, a STRIP_ROWS x COLS strip
+assert len(STRIP_CC) == STRIP_ROWS and COLS == STRIP_COLS
 
 CH_BUTTONS = 0        # MIDI channel 1
 CH_FEATURES = 6       # MIDI channel 7
@@ -213,15 +217,14 @@ class LaunchControlXL3:
 
 
 def blank():
-    return [[0.0] * COLS for _ in range(ROWS)]
+    return [[0.0] * COLS for _ in range(ENC_ROWS)]
 
 
 # ----------------------------------------------------------------- effects --
-# Row 0 = top encoder row ... row 4 = lower button row.
-# frame() returns a ROWS x COLS grid of brightness values 0..1.
-
-CENTER_R, CENTER_C = (ROWS - 1) / 2, (COLS - 1) / 2
-
+# Encoder layer: row 0 = top encoder row ... row 2 = bottom encoder row (3 x 8).
+# frame() returns an ENC_ROWS x COLS grid of brightness values 0..1.
+# Tuned for 3 rows: fewer stars, slower drops with shorter tails so a drop stays readable.
+# The mute/solo rows below run their own strip effects (strips.py).
 
 class Effect:
     name = "effect"
@@ -230,10 +233,10 @@ class Effect:
         raise NotImplementedError
 
 
-def draw_streak(grid, x, y, peak=1.0, tail=1.2, slope=0.0, up=False):
+def draw_streak(grid, x, y, peak=1.0, tail=0.8, slope=0.0, up=False):
     """A soft drop head at row y with a fading tail behind it, max-blended into grid.
     x may be fractional (split across two columns); slope = columns per row along the tail."""
-    for r in range(ROWS):
+    for r in range(ENC_ROWS):
         behind = (r - y) if up else (y - r)
         i = peak * (math.exp(-behind / tail) if behind >= 0 else math.exp(-behind * behind / 0.15))
         if i < 0.01:
@@ -248,16 +251,16 @@ def draw_streak(grid, x, y, peak=1.0, tail=1.2, slope=0.0, up=False):
 
 class Constellation(Effect):
     name = "constellation"
-    MAX_STARS = 7
+    MAX_STARS = 4
 
     def __init__(self):
         self.stars = []  # [row, col, start, duration, peak]
 
     def frame(self, t, dt):
         self.stars = [s for s in self.stars if t - s[2] < s[3]]
-        if len(self.stars) < self.MAX_STARS and random.random() < dt * 1.2:
+        if len(self.stars) < self.MAX_STARS and random.random() < dt * 0.8:
             taken = {(s[0], s[1]) for s in self.stars}
-            free = [(r, c) for r in range(ROWS) for c in range(COLS) if (r, c) not in taken]
+            free = [(r, c) for r in range(ENC_ROWS) for c in range(COLS) if (r, c) not in taken]
             r, c = random.choice(free)
             self.stars.append([r, c, t, random.uniform(2.0, 5.0), random.uniform(0.6, 1.0)])
         grid = blank()
@@ -273,11 +276,11 @@ class Drift(Effect):
         self.drops = []  # [col, y, speed]
 
     def frame(self, t, dt):
-        if random.random() < dt * 2.5:
-            self.drops.append([random.randrange(COLS), -1.0, random.uniform(1.5, 3.0)])
+        if random.random() < dt * 1.6:
+            self.drops.append([random.randrange(COLS), -1.0, random.uniform(1.0, 2.0)])
         for drop in self.drops:
             drop[1] += drop[2] * dt
-        self.drops = [d for d in self.drops if d[1] < ROWS + 4]
+        self.drops = [d for d in self.drops if d[1] < ENC_ROWS + 3]
         grid = blank()
         for c, y, _ in self.drops:
             draw_streak(grid, c, y)
@@ -294,11 +297,11 @@ class Showers(Effect):
     def frame(self, t, dt):
         weather = 0.5 + 0.3 * math.sin(t * 0.031) + 0.2 * math.sin(t * 0.017 + 2.0)  # 0..1, minutes-long
         rain = smoothstep(0.45, 0.9, weather)
-        if random.random() < dt * (0.35 + 5.0 * rain):
-            self.drops.append([random.randrange(COLS), -1.0, random.uniform(1.5, 3.0) + rain])
+        if random.random() < dt * (0.25 + 3.2 * rain):
+            self.drops.append([random.randrange(COLS), -1.0, random.uniform(1.0, 2.0) + 0.7 * rain])
         for d in self.drops:
             d[1] += d[2] * dt
-        self.drops = [d for d in self.drops if d[1] < ROWS + 4]
+        self.drops = [d for d in self.drops if d[1] < ENC_ROWS + 3]
         grid = blank()
         for c, y, _ in self.drops:
             draw_streak(grid, c, y)
@@ -312,15 +315,171 @@ class Haze(Effect):
     def __init__(self):
         self.sky = Constellation()
         self.waves = [[(random.uniform(0.08, 0.25), random.uniform(0, 2 * math.pi)) for _ in range(COLS)]
-                      for _ in range(ROWS)]
+                      for _ in range(ENC_ROWS)]
 
     def frame(self, t, dt):
         grid = self.sky.frame(t, dt)
-        for r in range(ROWS):
+        for r in range(ENC_ROWS):
             for c in range(COLS):
                 freq, phase = self.waves[r][c]
                 glow = 0.08 + 0.16 * (0.5 + 0.5 * math.sin(t * freq + phase))
                 grid[r][c] = max(grid[r][c], glow)
+        return grid
+
+
+def splat(grid, r, c, peak):
+    """Light a fractional (r, c) position, spread over the up to 4 nearest cells, max-blended.
+    Weights are softened (w ** 0.6) so a light between two cells doesn't dim much."""
+    r0, c0 = math.floor(r), math.floor(c)
+    fr, fc = r - r0, c - c0
+    for rr, wr in ((r0, 1 - fr), (r0 + 1, fr)):
+        for cc, wc in ((c0, 1 - fc), (c0 + 1, fc)):
+            w = wr * wc
+            if w > 0 and 0 <= rr < ENC_ROWS and 0 <= cc < COLS:
+                grid[rr][cc] = max(grid[rr][cc], peak * w ** 0.6)
+
+
+def wrap(d, period):
+    """Signed distance d folded into -period/2 .. period/2."""
+    return (d + period / 2) % period - period / 2
+
+
+class Breath(Effect):
+    """One column at a time breathes in: its rings light bottom to top, hold, then fade top-down.
+    A new column starts while the last one is still exhaling."""
+    name = "breath"
+    DURATION = 7.0
+
+    def __init__(self):
+        self.breaths = []     # [col, start]
+        self.next_at = 0.0
+
+    def frame(self, t, dt):
+        self.breaths = [b for b in self.breaths if t - b[1] < self.DURATION]
+        if t >= self.next_at:
+            recent = {b[0] for b in self.breaths}
+            self.breaths.append([random.choice([c for c in range(COLS) if c not in recent]), t])
+            self.next_at = t + random.uniform(3.5, 5.5)
+        grid = blank()
+        for c, start in self.breaths:
+            p = (t - start) / self.DURATION
+            for k in range(ENC_ROWS):                  # k = 0 bottom ring ... 2 top ring
+                on_at = 0.05 + 0.12 * k                # inhale: bottom first
+                off_at = 0.58 + 0.12 * (ENC_ROWS - 1 - k)   # exhale: top first
+                level = smoothstep(on_at, on_at + 0.16, p) * (1 - smoothstep(off_at, off_at + 0.16, p))
+                r = ENC_ROWS - 1 - k
+                grid[r][c] = max(grid[r][c], (0.95 - 0.1 * k) * level)
+        return grid
+
+
+class Lighthouse(Effect):
+    """A dim beam turns along the middle row, about once every 20 s, with a faint spill above and
+    below. It wraps from the right edge back to the left, like a light going round."""
+    name = "lighthouse"
+    PERIOD = 20.0
+
+    def frame(self, t, dt):
+        pos = (t / self.PERIOD % 1.0) * COLS
+        mid = ENC_ROWS // 2
+        grid = blank()
+        for c in range(COLS):
+            beam = math.exp(-(wrap(c - pos, COLS) / 0.9) ** 2)
+            for r in range(ENC_ROWS):
+                grid[r][c] = beam * (0.85 if r == mid else 0.22)
+        return grid
+
+
+class Tides(Effect):
+    """A slow swell runs along the columns: each column fills to a height that rises and falls,
+    the bottom ring always faintly lit, the top ring only at the crests."""
+    name = "tides"
+
+    def frame(self, t, dt):
+        grid = blank()
+        for c in range(COLS):
+            h = (0.5 + 0.3 * math.sin(t * 0.35 - c * 0.55)
+                 + 0.2 * math.sin(t * 0.13 + c * 0.3 + 1.0))        # 0..1
+            height = 0.4 + 2.5 * h ** 1.6                              # in rings, from the bottom
+            for k in range(ENC_ROWS):
+                fill = clamp01(height - k)
+                grid[ENC_ROWS - 1 - k][c] = (0.3, 0.55, 0.9)[k] * fill ** 1.5   # faint low, bright crest
+        return grid
+
+
+class Fireflies(Effect):
+    """A few lights wander the grid, gliding cell to cell with pauses in between. They come and go,
+    and brighten when two of them meet."""
+    name = "fireflies"
+    COUNT = 3
+
+    def __init__(self):
+        self.flies = []
+
+    def spawn(self, t):
+        r, c = random.randrange(ENC_ROWS), random.randrange(COLS)
+        return {"from": (r, c), "to": (r, c), "move_at": t + random.uniform(0.5, 2.0), "dur": 1.0,
+                "born": t, "life": random.uniform(18.0, 35.0), "phase": random.uniform(0, 2 * math.pi)}
+
+    def frame(self, t, dt):
+        self.flies = [f for f in self.flies if t - f["born"] < f["life"]]
+        if len(self.flies) < self.COUNT and random.random() < dt * 0.4:
+            self.flies.append(self.spawn(t))
+        spots = []
+        for f in self.flies:
+            p = smoothstep(0.0, 1.0, (t - f["move_at"]) / f["dur"]) if t > f["move_at"] else 0.0
+            (r0, c0), (r1, c1) = f["from"], f["to"]
+            r, c = r0 + (r1 - r0) * p, c0 + (c1 - c0) * p
+            if p >= 1.0:          # arrived: rest a moment, then pick a neighbouring cell
+                f["from"] = f["to"]
+                options = [(r1 + dr, c1 + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                           if (dr or dc) and 0 <= r1 + dr < ENC_ROWS and 0 <= c1 + dc < COLS]
+                f["to"] = random.choice(options)
+                f["move_at"] = t + random.uniform(0.4, 2.0)
+                f["dur"] = random.uniform(1.0, 2.0)
+            age = t - f["born"]
+            life = smoothstep(0.0, 2.0, age) * (1 - smoothstep(f["life"] - 2.5, f["life"], age))
+            glow = 0.7 + 0.15 * math.sin(t * 1.3 + f["phase"])
+            spots.append([r, c, glow * life])
+        for i, a in enumerate(spots):
+            for b in spots[i + 1:]:
+                if math.hypot(a[0] - b[0], a[1] - b[1]) < 1.3:   # two fireflies meet
+                    a[2] = min(1.0, a[2] + 0.25)
+                    b[2] = min(1.0, b[2] + 0.25)
+        grid = blank()
+        for r, c, peak in spots:
+            splat(grid, r, c, peak)
+        return grid
+
+
+class Currents(Effect):
+    """A soft slanted band drifts across the grid, now and then, with a fainter one passing the other
+    way. Mostly one band in view, sometimes none."""
+    name = "currents"
+
+    def frame(self, t, dt):
+        grid = blank()
+        for r in range(ENC_ROWS):
+            for c in range(COLS):
+                main = math.exp(-(wrap(c + 0.7 * r - 0.45 * t, 12.0) / 1.0) ** 2)
+                back = math.exp(-(wrap(c - 0.6 * r + 0.3 * t + 5.0, 15.0) / 0.9) ** 2)
+                grid[r][c] = max(0.8 * main, 0.35 * back)
+        return grid
+
+
+class Veil(Effect):
+    """Aurora curtains: overlapping slow waves where only the crests show, so soft patches drift
+    sideways and ripple from ring to ring."""
+    name = "veil"
+
+    def frame(self, t, dt):
+        grid = blank()
+        sway = 2.0 * math.sin(t * 0.11)
+        for r in range(ENC_ROWS):
+            for c in range(COLS):
+                v = (math.sin(c * 0.7 + t * 0.38 + sway + r * 0.45)
+                     + math.sin(c * 0.33 - t * 0.23 + r * 0.9 + 1.7)
+                     + 0.5 * math.sin(t * 0.17 + r * 1.3 + c * 0.15))
+                grid[r][c] = 0.85 * smoothstep(0.7, 2.0, v)
         return grid
 
 
@@ -332,7 +491,7 @@ def side_buttons(now):
     return out
 
 
-EFFECTS = [Constellation, Drift, Showers, Haze]
+EFFECTS = [Constellation, Drift, Showers, Haze, Breath, Lighthouse, Tides, Fireflies, Currents, Veil]
 XFADE = 1.5  # seconds to crossfade between effects
 
 
@@ -350,10 +509,13 @@ DEFAULTS = {
     "loop_seconds": 0,         # 0 = stay on one effect
     "shuffle": False,
     "enabled": [cls.name for cls in EFFECTS],   # effects in the auto-loop / Play-Record cycle
+    "known": ["constellation", "drift", "showers", "haze"],   # effects the saved "enabled" list knew about
     "power": True,
     "screen_timeout": 30,      # seconds before the OLED blanks with no new info (0 = never)
-    "launchkey": {},           # Launchkey MK4 settings (defaults in launchkey_fx.DEFAULTS)
+    "launchkey": {},           # Launchkey MK4 settings (defaults in strips.DEFAULTS)
+    "xl_strip": {},            # XL 3 mute/solo rows (defaults in STRIP_DEFAULTS)
 }
+STRIP_DEFAULTS = {"effect": "scanner", "theme": "ice", "brightness": 0.7}
 
 
 # -------------------------------------------------------------------- main --
@@ -398,13 +560,20 @@ def main():
         return
 
     cfg = load_config(args.config, DEFAULTS)
-    if not isinstance(cfg["launchkey"], dict):
-        cfg["launchkey"] = {}
+    for key in ("launchkey", "xl_strip"):
+        if not isinstance(cfg[key], dict):
+            cfg[key] = {}
     if args.auto is not None:
         cfg["loop_seconds"] = args.auto * 60
     if args.screen_timeout is not None:
         cfg["screen_timeout"] = max(0.0, args.screen_timeout)
     names = [e.name for e in effects]
+    added = [n for n in names if n not in cfg["known"]]   # effects new since the settings were saved
+    if added:
+        cfg["enabled"] = [n for n in names if n in cfg["enabled"] or n in added]
+        cfg["known"] = names
+        log(f"New effects added to the loop: {', '.join(added)}")
+        save_config(args.config, cfg)
     index = find_by_name(effects, args.effect, "effect") if args.effect else (
         names.index(cfg["effect"]) if cfg["effect"] in names else 0)
     theme_names = [th.name for th in THEMES]
@@ -429,7 +598,6 @@ def main():
             log(f"  - {name}")
         log("(if it's plugged in but not listed above, pass --port \"<part of the name>\")")
 
-    pulses = [0.0] * COLS
     flashes = {}                     # side button cc -> 0..1, lit up when pressed
     side = {cc: BLACK for cc in SIDE_BUTTONS}
     current = [[BLACK] * COLS for _ in range(ROWS)]  # eased colour actually shown
@@ -450,15 +618,23 @@ def main():
                    speed=round(speed, 3), brightness=round(brightness, 3))
         save_config(args.config, cfg)
 
-    def show_screen(wake=True):
+    def show_screen(wake=True, layer="encoders"):
         """wake=False (auto-loop): only refresh the text if the screen is already on, keep its timeout."""
         nonlocal screen_at
         if args.no_screen or (not wake and screen_at is None):
             return
-        name, theme = effects[index].name, THEMES[theme_index].name
-        dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
+        if layer == "strip":
+            dev.screen("MUTE/SOLO FX", f"{strip.index + 1} {strip.name}",
+                       f"{strip.theme.name} x{float(strip.cfg['speed']):.1f}")
+        else:
+            name, theme = effects[index].name, THEMES[theme_index].name
+            dev.screen("LED FX", f"{index + 1} {name}", f"{theme} x{speed:.1f}")
         if wake:
             screen_at = time.perf_counter()
+
+    def strip_announce(wake=True):
+        log(f"Mute/solo effect {strip.index + 1}: {strip.name}  theme: {strip.theme.name}")
+        show_screen(wake, layer="strip")
 
     def announce(wake=True):
         name, theme = effects[index].name, THEMES[theme_index].name
@@ -518,8 +694,6 @@ def main():
         if "power" in cmd:
             cfg["power"] = bool(cmd["power"])
             log("LEDs on" if cfg["power"] else "LEDs off (standby)")
-        if "pulse" in cmd:
-            pulses[max(0, min(COLS - 1, int(cmd["pulse"])))] = 1.0
         changed()
 
     def publish(now):
@@ -537,8 +711,10 @@ def main():
             "enabled": cfg["enabled"],
             "power": cfg["power"],
             "next_in": max(0.0, loop - (now - loop_from)) if loop > 0 else None,
-            "leds": [hex_color(rgb) for row in current for rgb in row],
+            "leds": [hex_color(rgb) for row in current[:ENC_ROWS] for rgb in row],
             "buttons": [{"label": SIDE_LABELS[cc], "color": hex_color(side[cc])} for cc in SIDE_BUTTONS],
+            "xl_strip": {**strip.state(), "connected": dev.connected,
+                         "pads": [hex_color(rgb) for row in current[ENC_ROWS:] for rgb in row]},
             "launchkey": rig.state() if rig else None,
         })
 
@@ -551,25 +727,39 @@ def main():
         old = effects[prev_index].frame(t, dt * speed)
         return [[o + (n - o) * k for o, n in zip(orow, nrow)] for orow, nrow in zip(old, grid)]
 
-    def render(grid, fade, dt):
-        """Theme-colour the grid and ease every LED toward it (gives crossfades for free)."""
+    def paint(r, c, target, ease):
+        rgb = lerp(current[r][c], target, ease)
+        current[r][c] = rgb
+        dev.set_rgb(GRID_CC[r][c], rgb if max(rgb) > 0.03 else BLACK)
+
+    def render(grid, strip_grid, fade, dt):
+        """Theme-colour both layers and ease every LED toward them (gives crossfades for free).
+        fade = startup / exit fade; each layer adds its own on/off fade."""
         theme = THEMES[theme_index]
-        ease = 1 - math.exp(-dt * 8)
-        for r in range(ROWS):
+        enc_level = brightness * power_k * fade
+        strip_level = float(strip.cfg["brightness"]) * strip.power_k * fade
+        ease = 1 - math.exp(-dt * 8)          # slow: the encoder effects are idle displays
+        for r in range(ENC_ROWS):
             for c in range(COLS):
-                i = 1 - (1 - grid[r][c]) * (1 - pulses[c])  # screen-blend the column swell
-                target = scale(theme.color(i), brightness * fade)
-                rgb = lerp(current[r][c], target, ease)
-                current[r][c] = rgb
-                dev.set_rgb(GRID_CC[r][c], rgb if max(rgb) > 0.03 else BLACK)
+                paint(r, c, scale(theme.color(grid[r][c]), enc_level), ease)
+        ease = 1 - math.exp(-dt * 22)         # quick, like the Launchkey pads, so the tails stay crisp
+        for r in range(STRIP_ROWS):
+            for c in range(COLS):
+                paint(ENC_ROWS + r, c, scale(strip.theme.color(strip_grid[r][c]), strip_level), ease)
+        side_level = max(enc_level, strip_level)   # stay lit while either layer is on
         ease_side = 1 - math.exp(-dt * 40)   # quick, so the REC blink stays crisp
         for cc, rgb in side_buttons(time.perf_counter()).items():
             k = flashes.get(cc, 0.0)
             if k > 0:
                 rgb = lerp(rgb, theme.color(1.0), k)
-            rgb = lerp(side[cc], scale(rgb, brightness * fade), ease_side)
+            rgb = lerp(side[cc], scale(rgb, side_level), ease_side)
             side[cc] = rgb
             dev.set_rgb(cc, rgb if max(rgb) > 0.03 else BLACK)
+
+    strip = StripEngine(cfg["xl_strip"], changed, strip_announce, defaults=STRIP_DEFAULTS)
+
+    def strip_frame(now, dt):
+        return strip.frame(now, min(0.1, dt))
 
     rig = None if args.no_launchkey else LaunchkeyRig(
         cfg["launchkey"], cfg, changed, port=args.lk_port, no_screen=args.no_screen, debug=args.debug)
@@ -588,6 +778,10 @@ def main():
                     if cmd.get("device") == "launchkey":
                         if rig:
                             rig.apply(cmd)
+                    elif cmd.get("device") == "xl_strip":
+                        if "power" in cmd:
+                            log("Mute/solo LEDs on" if cmd["power"] else "Mute/solo LEDs off (standby)")
+                        strip.apply(cmd)
                     else:
                         apply(cmd)
                 except (TypeError, ValueError, KeyError):
@@ -649,11 +843,7 @@ def main():
                 elif msg.channel == CH_BUTTONS and msg.value > 0:
                     if msg.control in side:
                         flashes[msg.control] = 1.0
-                    if 37 <= msg.control <= 44:
-                        pulses[msg.control - 37] = 1.0
-                    elif 45 <= msg.control < 45 + len(effects):
-                        select(msg.control - 45)
-                    elif msg.control in (CC_PLAY, CC_RECORD):
+                    if msg.control in (CC_PLAY, CC_RECORD):
                         step(1 if msg.control == CC_PLAY else -1)
                 elif msg.channel == CH_FEATURES and msg.control == CC_MODE_REPORT and msg.value not in (1, 2):
                     log("Device switched to a Custom Mode - select DAW Mixer/Control to see the effects.")
@@ -669,8 +859,7 @@ def main():
             t += dt * speed
             power_k += ((1.0 if cfg["power"] else 0.0) - power_k) * (1 - math.exp(-dt * 3))
             fade_in = smoothstep(0.0, 1.5, now - start)
-            render(compose(dt), fade_in * power_k, dt)
-            pulses = [p * math.exp(-dt / 0.35) for p in pulses]
+            render(compose(dt), strip_frame(now, dt), fade_in, dt)
             flashes = {cc: k * math.exp(-dt / 0.3) for cc, k in flashes.items() if k > 0.01}
             if rig:
                 rig.tick(now)
@@ -690,7 +879,7 @@ def main():
                     dt, last = now - last, now
                     t += dt * speed
                     if dev.connected:
-                        render(compose(dt), (1 - smoothstep(0.0, 1.0, now - fade_start)) * power_k, dt)
+                        render(compose(dt), strip_frame(now, dt), 1 - smoothstep(0.0, 1.0, now - fade_start), dt)
                     if rig:
                         rig.tick(now)
                     time.sleep(frame_time)

@@ -1,34 +1,43 @@
 # Launch Control XL 3 LEDs
 
-Ambient LED effects for the **Novation Launch Control XL 3**: slow ambient animations
-across the encoder and button LEDs, 11 colour themes, with a browser control panel. Built to run all
-the time in the background and survive the device being unplugged and plugged back in.
+Ambient LED effects for the **Novation Launch Control XL 3**, in two independent layers, with
+11 colour themes and a browser control panel. Built to run all the time in the background and
+survive the device being unplugged and plugged back in.
 
 ## Features
 
-- **4 effects**: constellation, drift, showers, haze.
-  Textures of small, independent lights, made for an idle display: sparse, one cell or column at a time, random timing, slow fades
+- **Two layers**, each with its own effect, theme, speed, brightness, loop and on/off, and its own
+  tab in the control panel:
+  - **Encoders** (the 24 encoder LEDs), slow idle displays made for the 3 x 8 grid:
+    - **constellation**, **drift**, **showers**, **haze**: small independent lights, random timing
+    - **breath**: one column at a time lights bottom to top, holds, fades top-down
+    - **lighthouse**: a dim beam turns along the middle row about every 20 s
+    - **tides**: a slow swell runs along the columns, the top ring lit only at the crests
+    - **fireflies**: a few lights glide from cell to cell and brighten when they meet
+    - **currents**: soft slanted bands drift across, one each way
+    - **veil**: aurora-like patches drift sideways and ripple from ring to ring
+  - **Mute/Solo** (the two button rows): the Launchkey's moving lights with a fading tail of 1 to 7
+    buttons: scanner, orbits, crossing, wings (see below)
 - **11 themes**: amber, ice, mono, indigo, moss, plus subtler two-hue ones: dusk, sea glass,
   slate, sand, tide, aurora
 - **Control panel** at <http://127.0.0.1:8765>:
+  - tabs for XL 3 encoders, XL 3 mute/solo and the Launchkey
   - a live view of the LEDs
   - pick an effect, or choose which ones are in the loop
   - loop time and shuffle
-  - theme, speed and brightness
+  - theme, speed and brightness (and trail for the mute/solo rows)
   - LEDs on/off
 - **Side buttons** stay lit white and Play stays green. The only movement is Record, blinking
   once a second like a studio REC light, whatever the effect speed
 - **Remembers your setup** in `lcxl3_fx.json` across restarts
 - **Hot-plug safe**: if the device is unplugged it waits for it, then carries on where it left off
-- **Device controls still work**:
+- **Device controls still work** for the encoder layer (the mute/solo layer is set from the panel):
 
   | Control | Does |
   |---|---|
   | Fader 1 | Speed |
   | Fader 2 | Brightness |
   | Fader 3 | Theme |
-  | Lower buttons 1–4 | Pick effect |
-  | Upper buttons | Swell on that column |
   | Play / Record | Next / previous effect |
 
 ## Launchkey MK4 (optional)
@@ -36,7 +45,8 @@ the time in the background and survive the device being unplugged and plugged ba
 If a **Novation Launchkey MK4** (25/37/49/61) is plugged in, the same app drives it too, with its
 own tab in the control panel and its own settings. Either device can be unplugged on its own.
 
-- **4 effects**: moving lights with a fading tail, set to anywhere from 1 to 7 pads long:
+- **4 effects** (`strips.py`, shared with the XL 3's mute/solo rows): moving lights with a fading
+  tail, set to anywhere from 1 to 7 pads long:
   - **scanner**: one light sweeping side to side across both rows
   - **orbits**: two lights opposite each other, circling the 16 pads
   - **crossing**: the two rows sweep in opposite directions and cross in the middle
