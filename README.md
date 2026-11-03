@@ -16,9 +16,8 @@ the time in the background and survive the device being unplugged and plugged ba
   - loop time and shuffle
   - theme, speed and brightness
   - LEDs on/off
-- **Side buttons** keep a 1-second beat with the REC blink, whatever the effect speed: a light
-  steps round the four arrows, Record blinks like a studio REC light, Play stays green,
-  Solo/Arm and Mute/Select take alternate beats
+- **Side buttons** stay lit white and Play stays green. The only movement is Record, blinking
+  once a second like a studio REC light, whatever the effect speed
 - **Remembers your setup** in `lcxl3_fx.json` across restarts
 - **Hot-plug safe**: if the device is unplugged it waits for it, then carries on where it left off
 - **Device controls still work**:
@@ -44,11 +43,10 @@ own tab in the control panel and its own settings. Either device can be unplugge
   - **wings**: two lights open out from the middle to the edges and back
 - **Pads** push the effect: the harder you hit, the more it boosts or turns the motion.
   Holding a pad down keeps it glowing.
-- **Button LEDs** keep their own 1-second beat, shared with the XL 3's REC blink and unaffected
-  by the speed setting: each arrow pair swaps every beat, the utility buttons chase one per beat,
-  Play stays lit, Record blinks like a studio REC light (the Launchkey keeps a faint glow on it even
-  when off), Stop and Loop breathe on alternate beats, and the two RGB arrows by the pads swap
-  every beat in white. Pressed buttons flash.
+- **Button LEDs** stay lit white, apart from the pads. The only movement is Record, blinking once
+  a second like a studio REC light, in step with the XL 3's (the Launchkey keeps a faint glow on it
+  even when off). Play's LED is white-only on the Launchkey, so it can't show green. Pressed
+  buttons flash.
 - **Device controls**:
 
   | Control | Does |

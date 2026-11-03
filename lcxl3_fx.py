@@ -25,9 +25,8 @@ Effects (lower buttons 1-4):
   1 constellation  2 drift  3 showers  4 haze
 Built as idle displays: sparse, one cell or column at a time, random timing,
 nothing sweeping the whole grid, slow fades.
-Side buttons keep the REC blink's beat (1 s, not the effect speed): the four arrows take turns
-around a circle, Record blinks red like a studio REC light, Play stays green, Solo/Arm and
-Mute/Select take alternate beats.
+Side buttons stay lit white, Play stays green, and Record blinks red like a studio REC light
+(1 s, not the effect speed). That blink is their only movement.
 Themes:   amber, ice, mono, indigo, moss, dusk, sea glass, slate, sand, tide, aurora
 
 Controls:
@@ -67,7 +66,7 @@ import time
 import mido
 
 import fxcore
-from fxcore import (BLACK, GAMMA, THEMES, ControlServer, beat_breathe, beat_chase, clamp01, envelope, hex_color, lerp,
+from fxcore import (BLACK, GAMMA, THEMES, ControlServer, clamp01, envelope, hex_color, lerp,
                     load_config, log, rec_blink, save_config, scale, smoothstep, themes_for_ui)
 from launchkey_fx import LaunchkeyRig
 
@@ -95,6 +94,7 @@ SIDE_LABELS = {
     CC_RECORD: "Record", CC_PLAY: "Play", SOLO_ARM: "Solo/Arm", MUTE_SELECT: "Mute/Select", CC_104: "Button 104",
 }
 RED, GREEN = (1.0, 0.04, 0.02), (0.05, 1.0, 0.12)
+WHITE = (0.6, 0.6, 0.6)
 
 SCREEN_STATIONARY = 0x35
 
@@ -324,21 +324,11 @@ class Haze(Effect):
         return grid
 
 
-def side_buttons(now, theme):
-    """Target colour (before brightness) of every side button, on the REC blink's beat (wall clock)."""
-    out = {}
-    # Arrows: one per beat round the four (up, right, down, left), lit with REC, then fading
-    for i, cc in enumerate(ARROWS):
-        k = beat_chase(now, i, 4)
-        out[cc] = scale(theme.color(0.35 + 0.65 * k), k)
-    # Record blinks like a studio REC light, Play stays lit
-    out[CC_RECORD] = scale(RED, rec_blink(now))
+def side_buttons(now):
+    """Target colour (before brightness) of every side button: steady white, Play green, Record blinking."""
+    out = {cc: WHITE for cc in SIDE_BUTTONS}
+    out[CC_RECORD] = scale(RED, rec_blink(now))   # studio REC light, on the wall clock
     out[CC_PLAY] = scale(GREEN, 0.8)
-    # Solo/Arm and Mute/Select take alternate beats, the small button breathes over four
-    for i, cc in enumerate((SOLO_ARM, MUTE_SELECT)):
-        k = beat_chase(now, i, 2)
-        out[cc] = scale(theme.color(0.4 + 0.6 * k), 0.04 + 0.86 * k)
-    out[CC_104] = scale(theme.color(0.7), 0.08 + 0.5 * beat_breathe(now, 4))
     return out
 
 
@@ -573,7 +563,7 @@ def main():
                 current[r][c] = rgb
                 dev.set_rgb(GRID_CC[r][c], rgb if max(rgb) > 0.03 else BLACK)
         ease_side = 1 - math.exp(-dt * 40)   # quick, so the REC blink stays crisp
-        for cc, rgb in side_buttons(time.perf_counter(), theme).items():
+        for cc, rgb in side_buttons(time.perf_counter()).items():
             k = flashes.get(cc, 0.0)
             if k > 0:
                 rgb = lerp(rgb, theme.color(1.0), k)

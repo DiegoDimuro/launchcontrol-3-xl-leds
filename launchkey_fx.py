@@ -25,7 +25,7 @@ import time
 
 import mido
 
-from fxcore import (BLACK, THEMES, THEME_NAMES, beat_breathe, beat_chase, clamp01, hex_color, lerp, log, rec_blink, scale,
+from fxcore import (BLACK, THEMES, THEME_NAMES, clamp01, hex_color, lerp, log, rec_blink, scale,
                     smoothstep, to7bit)
 
 # ---------------------------------------------------------------- protocol --
@@ -50,6 +50,7 @@ BANK_UP, BANK_DOWN = 106, 107
 SCENE, FUNCTION = 104, 105
 UTILITY = [74, 75, 76, 77]           # Capture MIDI, Quantise, Metronome, Undo
 TRANSPORT = [115, 116, 117, 118]     # Play, Stop, Record, Loop
+BUTTON_WHITE = 0.6                    # steady level of every button LED but Record
 MONO_BUTTONS = [TRACK_LEFT, TRACK_RIGHT, PAGE_UP, PAGE_DOWN, BANK_UP, BANK_DOWN] + UTILITY + TRANSPORT
 RGB_BUTTONS = [SCENE, FUNCTION]
 BUTTON_LABELS = {
@@ -650,28 +651,19 @@ class LaunchkeyRig:
                 if not self.paused:
                     self.dev.set_pad(PAD_NOTES[r][c], rgb if max(rgb) > 0.02 else BLACK)
 
-        # Buttons keep the REC blink's beat (wall clock, shared with the XL 3), apart from the pads
-        # and the speed setting: each arrow pair swaps every beat, the utility row chases one per
-        # beat, Play stays lit, Record blinks like a studio REC light, Stop and Loop breathe on
-        # alternate beats, and the two RGB arrows swap every beat. Pressing a button flashes it.
+        # Buttons stay lit white, apart from the pads and the speed setting. The only movement is
+        # Record, blinking like a studio REC light in step with the XL 3's. Pressing a button flashes it.
         f, now = self.flashes, time.perf_counter()
-        mono = {}
-        for p, (one, other) in enumerate(((TRACK_LEFT, TRACK_RIGHT), (PAGE_UP, PAGE_DOWN), (BANK_UP, BANK_DOWN))):
-            mono[one], mono[other] = 0.8 * beat_chase(now, p % 2, 2), 0.8 * beat_chase(now, 1 - p % 2, 2)
-        for i, cc in enumerate(UTILITY):
-            mono[cc] = 0.6 * beat_chase(now, i, 4)
-        mono[115] = 0.8                                   # Play
-        mono[117] = rec_blink(now)                        # Record, in step with the XL 3's
-        mono[116] = 0.04 + 0.5 * beat_breathe(now, 2)     # Stop
-        mono[118] = 0.04 + 0.5 * beat_breathe(now, 2, 1)  # Loop
+        mono = {cc: BUTTON_WHITE for cc in MONO_BUTTONS}
+        mono[117] = rec_blink(now)                        # Record
         fast = 1 - math.exp(-dt * 40)
         for cc, v in mono.items():
             v = clamp01(max(v, f.get(cc, 0))) * level
             self.buttons[cc] = lerp(self.buttons[cc], (v, v, v), fast)
             self.dev.set_mono(cc, self.buttons[cc][0])
-        # The two RGB arrow buttons, white, swap every beat
-        for i, cc in enumerate((FUNCTION, SCENE)):
-            v = clamp01(max(0.8 * beat_chase(now, i, 2), f.get(cc, 0))) * level
+        # The two RGB arrow buttons, steady white too
+        for cc in (FUNCTION, SCENE):
+            v = clamp01(max(BUTTON_WHITE, f.get(cc, 0))) * level
             index, shown = palette_index((v, v, v))
             self.buttons[cc] = shown
             self.dev.set_palette(cc, index)

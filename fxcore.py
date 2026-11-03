@@ -56,13 +56,8 @@ def envelope(age, duration):
     return math.sin(math.pi * age / duration) ** 2
 
 
-def breathe(t, period, phase=0.0):
-    """0..1, slow in and out, lingering a little at the bottom."""
-    return (0.5 - 0.5 * math.cos(2 * math.pi * (t / period + phase))) ** 1.6
-
-
 # Button LEDs keep their own beat, in wall-clock seconds, so the speed setting doesn't change it.
-# Everything on the buttons of both devices lines up with the REC blink.
+# The REC blink is the only button movement on both devices, and they blink in step.
 BEAT = 1.0
 
 
@@ -70,17 +65,6 @@ def rec_blink(now):
     """Studio REC light: on for the first half of each beat, off for the second, barely softened edges."""
     x = (now / BEAT) % 1.0
     return smoothstep(0.0, 0.04, x) * (1 - smoothstep(0.5, 0.54, x))
-
-
-def beat_chase(now, i, n):
-    """Item i of n takes turns, one per beat: lit for the first half of its beat (with REC), then fades."""
-    since = (now / BEAT - i) % n                  # beats since this item's turn started
-    return smoothstep(0.0, 0.04, since) if since < 0.5 else math.exp(-(since - 0.5) * 6)
-
-
-def beat_breathe(now, beats, phase=0.0):
-    """Breath lasting `beats` beats, peaking on a beat (phase in beats)."""
-    return breathe(now - phase * BEAT, beats * BEAT, 0.5)
 
 
 def to7bit(v):
