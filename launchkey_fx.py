@@ -26,6 +26,7 @@ import time
 import mido
 
 from fxcore import BLACK, clamp01, hex_color, lerp, log, rec_blink, scale, smoothstep, to7bit
+from midilink import MidiLink
 from strips import COLS, ROWS, StripEngine
 
 # ---------------------------------------------------------------- protocol --
@@ -82,16 +83,16 @@ def palette_index(rgb):
 
 
 class LaunchkeyMK4:
-    """Same contract as LaunchControlXL3: connect() can be retried, failed I/O drops the connection."""
+    """Same contract as LaunchControlXL3: all MIDI I/O runs on a MidiLink worker thread."""
 
     def __init__(self, port_hint=None):
         self.hint = port_hint
-        self.out = self.inp = None
         self._cache = {}
+        self.link = MidiLink("Launchkey", lambda names: self._find(names, port_hint))
 
     @property
     def connected(self):
-        return self.out is not None
+        return self.link.connected
 
     @staticmethod
     def _find(names, hint):
@@ -104,46 +105,22 @@ class LaunchkeyMK4:
                 return n
         return None
 
-    def connect(self):
-        try:
-            out_name = self._find(mido.get_output_names(), self.hint)
-            in_name = self._find(mido.get_input_names(), self.hint)
-            if out_name is None:
-                return False
-            self.out = mido.open_output(out_name)
-            self.inp = mido.open_input(in_name) if in_name else None
-        except Exception:
-            self.disconnect()
+    def poll(self):
+        """Call every frame. True right after the device (re)connected: it's in DAW mode, repaint it."""
+        if not self.link.poll():
             return False
         self._cache.clear()
-        log(f"Launchkey connected. Output: {out_name}  Input: {in_name or '(none - controls disabled)'}")
         self.daw_mode(True)
         self._raw(0xB6, CC_PAD_MODE, PAD_MODE_DAW)
         self._raw(0xB6, 0x45, 0x7F)   # relative encoders
-        return self.connected
+        return True
 
-    def disconnect(self):
-        for port in (self.out, self.inp):
-            try:
-                if port:
-                    port.close()
-            except Exception:
-                pass
-        self.out = self.inp = None
-
-    def present(self):
-        try:
-            return self._find(mido.get_output_names(), self.hint) is not None
-        except Exception:
-            return False
+    def connect(self, timeout):
+        """Startup: wait up to timeout for the device. Returns whether it's connected."""
+        return self.link.wait(timeout) and self.poll()
 
     def _send(self, msg):
-        if not self.out:
-            return
-        try:
-            self.out.send(msg)
-        except Exception:
-            self.disconnect()
+        self.link.send(msg)
 
     def _raw(self, *data):
         self._send(mido.Message.from_bytes(list(data)))
@@ -187,13 +164,7 @@ class LaunchkeyMK4:
         self.screen("", "", "")
 
     def pending(self):
-        if not self.inp:
-            return []
-        try:
-            return list(self.inp.iter_pending())
-        except Exception:
-            self.disconnect()
-            return []
+        return self.link.pending()
 
     def all_off(self):
         self._cache.clear()
@@ -221,7 +192,7 @@ class LaunchkeyRig:
         self.dev = LaunchkeyMK4(port)
         self.screen_at = None
         self.engine = StripEngine(cfg, on_change, self.announce)
-        self.last = self.start = self.checked_at = self.retry_at = time.perf_counter()
+        self.last = self.start = time.perf_counter()
         self.exit_k = 1.0
         self.exiting = False
         self.paused = False              # pads taken over by another pad mode on the device
@@ -229,7 +200,7 @@ class LaunchkeyRig:
         self.pads = [[BLACK] * COLS for _ in range(ROWS)]
         self.buttons = {cc: BLACK for cc in MONO_BUTTONS + RGB_BUTTONS}
         self.was_connected = False
-        if self.dev.connect():
+        if self.dev.connect(timeout=1.5):
             self.was_connected = True
             time.sleep(0.1)
             self.announce()
@@ -383,23 +354,17 @@ class LaunchkeyRig:
         dt = min(0.1, now - self.last)
         self.last = now
         dev = self.dev
-        if dev.connected and now - self.checked_at > 2.0:
-            self.checked_at = now
-            if not dev.present():
-                dev.disconnect()
+        if dev.poll():
+            log("Launchkey reconnected.")
+            self.was_connected = True
+            self.paused = False
+            self.pads = [[BLACK] * COLS for _ in range(ROWS)]
+            self.start = now
+            self.announce()
         if not dev.connected:
             if self.was_connected:
                 log("Launchkey disconnected - waiting for it to come back...")
                 self.was_connected = False
-            if now - self.retry_at > 1.0 and not self.exiting:
-                self.retry_at = now
-                if dev.connect():
-                    log("Launchkey reconnected.")
-                    self.was_connected = True
-                    self.paused = False
-                    self.pads = [[BLACK] * COLS for _ in range(ROWS)]
-                    self.start = self.checked_at = now
-                    self.announce()
             return
 
         self.read_input()
@@ -423,5 +388,5 @@ class LaunchkeyRig:
             if self.screen_at is not None:
                 self.dev.screen_off()
             self.dev.daw_mode(False)
-        self.dev.disconnect()
+        self.dev.link.close()
         log("Launchkey LEDs off, back in standalone mode.")

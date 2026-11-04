@@ -69,6 +69,7 @@ import fxcore
 from fxcore import (BLACK, GAMMA, THEMES, ControlServer, clamp01, envelope, hex_color, lerp,
                     load_config, log, rec_blink, save_config, scale, smoothstep, themes_for_ui)
 from launchkey_fx import LaunchkeyRig
+from midilink import MidiLink
 from strips import COLS as STRIP_COLS, ROWS as STRIP_ROWS, StripEngine
 
 # ---------------------------------------------------------------- protocol --
@@ -104,16 +105,16 @@ SCREEN_STATIONARY = 0x35
 
 
 class LaunchControlXL3:
-    """Survives unplug/replug: connect() can be retried, failed I/O drops the connection."""
+    """Survives unplug/replug and wedged drivers: all MIDI I/O runs on a MidiLink worker thread."""
 
     def __init__(self, port_hint=None):
         self.hint = port_hint
-        self.out = self.inp = None
         self._cache = {}
+        self.link = MidiLink("Launch Control XL 3", lambda names: self._find(names, port_hint))
 
     @property
     def connected(self):
-        return self.out is not None
+        return self.link.connected
 
     @staticmethod
     def _find(names, hint):
@@ -133,46 +134,20 @@ class LaunchControlXL3:
         return next((n for n in names if "daw" in n.lower() and "launch" in n.lower()
                      and "launchkey" not in n.lower()), None)
 
-    def connect(self):
-        """Open the DAW ports and enter DAW mode. Returns False if the device isn't there."""
-        try:
-            out_name = self._find(mido.get_output_names(), self.hint)
-            in_name = self._find(mido.get_input_names(), self.hint)
-            if out_name is None:
-                return False
-            self.out = mido.open_output(out_name)
-            self.inp = mido.open_input(in_name) if in_name else None
-        except Exception:
-            self.disconnect()
+    def poll(self):
+        """Call every frame. True right after the device (re)connected: it's in DAW mode, repaint it."""
+        if not self.link.poll():
             return False
         self._cache.clear()
-        log(f"Connected. Output: {out_name}  Input: {in_name or '(none - controls disabled)'}")
         self.daw_mode(True)
-        return self.connected
+        return True
 
-    def disconnect(self):
-        for port in (self.out, self.inp):
-            try:
-                if port:
-                    port.close()
-            except Exception:
-                pass
-        self.out = self.inp = None
-
-    def present(self):
-        """True while the device's DAW port is still listed by the OS."""
-        try:
-            return self._find(mido.get_output_names(), self.hint) is not None
-        except Exception:
-            return False
+    def connect(self, timeout):
+        """Startup: wait up to timeout for the device. Returns whether it's connected."""
+        return self.link.wait(timeout) and self.poll()
 
     def _sysex(self, payload):
-        if not self.out:
-            return
-        try:
-            self.out.send(mido.Message("sysex", data=HEADER + payload))
-        except Exception:
-            self.disconnect()
+        self.link.send(mido.Message("sysex", data=HEADER + payload))
 
     def daw_mode(self, on):
         self._sysex([0x02, 0x7F if on else 0x00])
@@ -199,13 +174,7 @@ class LaunchControlXL3:
         self.screen("", "", "")
 
     def pending(self):
-        if not self.inp:
-            return []
-        try:
-            return list(self.inp.iter_pending())
-        except Exception:
-            self.disconnect()
-            return []
+        return self.link.pending()
 
     def all_off(self):
         self._cache.clear()
@@ -213,7 +182,7 @@ class LaunchControlXL3:
             self.set_rgb(cc, BLACK)
 
     def close(self):
-        self.disconnect()
+        self.link.close()
 
 
 def blank():
@@ -590,11 +559,11 @@ def main():
             log(f"Control panel disabled - port {args.ui_port} unavailable ({e})")
 
     dev = LaunchControlXL3(args.port)
-    if dev.connect():
+    if dev.connect(timeout=2.0):
         time.sleep(0.2)
     else:
         log("Waiting for the Launch Control XL 3 DAW port... MIDI outputs right now:")
-        for name in mido.get_output_names():
+        for name in dev.link.last_names:
             log(f"  - {name}")
         log("(if it's plugged in but not listed above, pass --port \"<part of the name>\")")
 
@@ -765,7 +734,7 @@ def main():
         cfg["launchkey"], cfg, changed, port=args.lk_port, no_screen=args.no_screen, debug=args.debug)
 
     announce()
-    start = last = checked_at = retry_at = published_at = time.perf_counter()
+    start = last = published_at = time.perf_counter()
     was_connected = dev.connected
     try:
         while True:
@@ -793,25 +762,18 @@ def main():
                 published_at = now
                 publish(now)
 
-            # Hot-plug: notice the device going away, keep retrying until it's back
-            if dev.connected and now - checked_at > 2.0:
-                checked_at = now
-                if not dev.present():
-                    dev.disconnect()
-            if not dev.connected:
-                if was_connected:
-                    log("Device disconnected - waiting for it to come back...")
-                    was_connected = False
-                if now - retry_at > 1.0:
-                    retry_at = now
-                    if dev.connect():
-                        time.sleep(0.2)
-                        log("Reconnected.")
-                        was_connected = True
-                        current = [[BLACK] * COLS for _ in range(ROWS)]
-                        side = {cc: BLACK for cc in SIDE_BUTTONS}
-                        announce()
-                        start = checked_at = time.perf_counter()
+            # Hot-plug: the MIDI worker thread finds the device and notices it going away
+            if dev.poll():
+                time.sleep(0.2)
+                log("Reconnected.")
+                was_connected = True
+                current = [[BLACK] * COLS for _ in range(ROWS)]
+                side = {cc: BLACK for cc in SIDE_BUTTONS}
+                announce()
+                start = time.perf_counter()
+            if not dev.connected and was_connected:
+                log("Device disconnected - waiting for it to come back...")
+                was_connected = False
             if not dev.connected:
                 if rig:
                     rig.tick(now)
@@ -894,6 +856,8 @@ def main():
         if rig:
             rig.close()
         log("LEDs off, devices back in standalone mode. Bye!")
+        if MidiLink.stuck_threads:
+            os._exit(0)    # don't let a MIDI call stuck in the driver hold up the exit
 
 
 if __name__ == "__main__":

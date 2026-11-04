@@ -119,3 +119,5 @@ The Launchkey works the same way, following the Launchkey MK4 Programmer's Refer
 the name short.
 
 Shared code (themes, settings file, control panel server) lives in `fxcore.py`.
+All MIDI I/O runs on a worker thread per device (`midilink.py`), so a driver call that hangs when
+a device drops out can't freeze the effects: a watchdog abandons the stuck port and reconnects.
